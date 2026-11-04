@@ -75,3 +75,6 @@ Testing/
 *.pt.bak
 __pycache__/
 *.pyc
+
+# local tool state
+.omc/
