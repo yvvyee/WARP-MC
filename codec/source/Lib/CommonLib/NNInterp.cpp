@@ -581,6 +581,36 @@ __attribute__((target("avx2"))) void vPassAvx2(const int64_t *Xh, int H, int nxs
     }
   }
 }
+// yvvyee: conv1x1x2Avx2 의 AVX-512 판 (NNI_SIMD 3). 4화소 묶음 둘 (pix[i], pix[i+4]) 을 zmm 두 절반에 실어 int64 8줄로. 곱 (vpmuldq)·합·반올림·포화는 AVX2 판과 같다:
+// floor((x + 2^(s-1)) / 2^s) 는 vpsraq (산술 시프트) 로 직접, 1 <= s <= 62 는 호출부 조건. np 가 8의 배수가 아니면 마지막 묶음은 두 절반에 같은 4화소 (한 번만 저장).
+#define NNI_T512 "avx2,avx512f,avx512bw,avx512vnni"
+__attribute__((target(NNI_T512))) void conv1x1x2Z(int Ca, int Cb, int nc, const int *cidx, const int64_t *baseA, const int32_t *wsa, int sha, const int64_t *baseB, const int32_t *wsb, int shb,
+  const int64_t *const *x, const int *pix, int np, int64_t (*y)[MAXHW])
+{
+  int64_t WA[64 * 32], WB[32 * 8];   // yvvyee: int64 로 두면 _mm512_set1_epi64 가 메모리 방송 피연산자로 접힌다
+  for (int i = 0; i < nc * Ca; i++) WA[i] = wsa[i];
+  for (int i = 0; i < Ca * Cb; i++) WB[i] = wsb[i];
+  const __m128i ca = _mm_cvtsi32_si128(sha), cb = _mm_cvtsi32_si128(shb);
+  const __m512i ha = _mm512_set1_epi64(1LL << (sha - 1)), hb = _mm512_set1_epi64(1LL << (shb - 1)), z = _mm512_setzero_si512(), p16 = _mm512_set1_epi64(32767), n16 = _mm512_set1_epi64(-32767);
+  for (int i = 0; i < np; i += 8)
+  {
+    const int p0 = pix ? pix[i] : i, p1 = i + 4 < np ? (pix ? pix[i + 4] : i + 4) : p0; __m512i xv[32], h1[32];
+    for (int k = 0; k < nc; k++) { const int64_t *s = x[cidx[k]]; xv[k] = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *) (s + p0))), _mm256_loadu_si256((const __m256i *) (s + p1)), 1); }
+    for (int o = 0; o < Ca; o++)
+    {
+      __m512i acc = _mm512_set1_epi64(baseA[o]);
+      for (int k = 0; k < nc; k++) acc = _mm512_add_epi64(acc, _mm512_mul_epi32(xv[k], _mm512_set1_epi64(WA[k * Ca + o])));
+      h1[o] = _mm512_min_epi64(_mm512_max_epi64(_mm512_sra_epi64(_mm512_add_epi64(acc, ha), ca), z), p16);
+    }
+    for (int o = 0; o < Cb; o++)
+    {
+      __m512i acc = _mm512_set1_epi64(baseB[o]);
+      for (int c = 0; c < Ca; c++) acc = _mm512_add_epi64(acc, _mm512_mul_epi32(h1[c], _mm512_set1_epi64(WB[c * Cb + o])));
+      const __m512i v = _mm512_min_epi64(_mm512_max_epi64(_mm512_sra_epi64(_mm512_add_epi64(acc, hb), cb), n16), p16);
+      _mm256_storeu_si256((__m256i *) (y[o] + p0), _mm512_castsi512_si256(v)); if (p1 != p0) _mm256_storeu_si256((__m256i *) (y[o] + p1), _mm512_extracti64x4_epi64(v, 1));
+    }
+  }
+}
 // yvvyee: pix 가 있으면 4개씩 연속 (pix[i+3] == pix[i]+3, np 는 4의 배수) 이어야 AVX2 판을 쓴다
 void conv1x1x2F(int simd, const C1L &La, const C1L &Lb, const int64_t *const *x, const int *sIn, const bool *isC, const int *pix, int np, int64_t (*y)[MAXHW])
 {
@@ -600,6 +630,7 @@ void conv1x1x2F(int simd, const C1L &La, const C1L &Lb, const int64_t *const *x,
   int32_t wsb[32 * 8]; for (int c = 0; c < Ca; c++) for (int o = 0; o < Cb; o++) wsb[c * Cb + o] = (int32_t) wb[o * Ca + c];
   bool v4 = simd >= 1 && (np & 3) == 0 && sha >= 1 && sha <= 62 && shb >= 1 && shb <= 62;
   if (v4 && pix) for (int i = 0; i < np; i += 4) if (pix[i + 3] != pix[i] + 3) { v4 = false; break; }
+  if (v4 && simd >= 3) { conv1x1x2Z(Ca, Cb, nc, cidx, baseA, wsa, sha, baseB, wsb, shb, x, pix, np, y); return; }   // yvvyee: AVX-512 (2026-11-04)
   if (v4) { conv1x1x2Avx2(Ca, Cb, nc, cidx, baseA, wsa, sha, baseB, wsb, shb, x, pix, np, y); return; }
   for (int i = 0; i < np; i++)
   {
@@ -633,6 +664,26 @@ void packPad(const int16_t *a, int Hh, int Ww, int Cs, int NP, uint32_t *XH, uin
         l[cp] = (uint32_t) (v0 & 255) | ((uint32_t) (v1 & 255) << 16);
       }
     }
+  }
+}
+// yvvyee: packPad 의 AVX-512 판 (NNI_SIMD 3, Cs == 2*NP 일 때). 채널 쌍 묶음은 int16 배열 순서 그대로이므로 XH = (int16) (x >> 8) (vpsraw), XL = x & 255 를 원소별로.
+// 패딩 행 py 의 안쪽 열 1..Ww 는 원천 행 reflI(py-1) 의 연속 구간 Ww*Cs 개, 가장자리 열 0, Ww+1 은 원천 열 1, Ww-2 (패딩 열 2, Ww-1) 복사.
+__attribute__((target(NNI_T512))) void packPadZ(const int16_t *a, int Hh, int Ww, int Cs, int NP, uint32_t *XH, uint32_t *XL)
+{
+  if (Cs != 2 * NP) { packPad(a, Hh, Ww, Cs, NP, XH, XL); return; }
+  const int Wp = Ww + 2, n = Ww * Cs; const __m512i m255 = _mm512_set1_epi16(255);
+  for (int py = 0; py < Hh + 2; py++)
+  {
+    const int16_t *s = a + reflI(py - 1, Hh) * Ww * Cs; uint32_t *hr = XH + py * Wp * NP, *lr = XL + py * Wp * NP;
+    int16_t *h = (int16_t *) (hr + NP), *l = (int16_t *) (lr + NP);
+    for (int i = 0; i < n; i += 32)
+    {
+      const __mmask32 m = n - i >= 32 ? (__mmask32) 0xFFFFFFFFu : (__mmask32) ((1u << (n - i)) - 1);
+      const __m512i v = _mm512_maskz_loadu_epi16(m, s + i);
+      _mm512_mask_storeu_epi16(h + i, m, _mm512_srai_epi16(v, 8)); _mm512_mask_storeu_epi16(l + i, m, _mm512_and_si512(v, m255));
+    }
+    memcpy(hr, hr + 2 * NP, NP * 4); memcpy(lr, lr + 2 * NP, NP * 4);
+    memcpy(hr + (Wp - 1) * NP, hr + (Ww - 1) * NP, NP * 4); memcpy(lr + (Wp - 1) * NP, lr + (Ww - 1) * NP, NP * 4);
   }
 }
 // yvvyee: 3x3 합성곱 마무리. 원식 acc = bo + sum w * (x*256) (up=0) ; sum w*x = 256*Sh + Sl
@@ -716,8 +767,88 @@ void conv3x3Scalar(const C3L &L, const uint32_t *XH, const uint32_t *XL, int Wp,
     conv3Finish(L, Sh, Sl, o16 ? o16 + (Y * ostr + X) * L.Co : nullptr, o64 ? o64 + Y * ostr + X : nullptr);
   }
 }
+// yvvyee: AVX-512 (avx512f, avx512bw, avx512_vnni) 판 3x3 합성곱 (NNI_SIMD 3). 묶음 자료(XH, XL, wpk)와 곱·합 항은 conv3x3Vnni 와 같고 레지스터 폭만 512비트.
+//  OB 2 (출력 16채널): zmm 하나 = 출력 16채널, OB 4: zmm 둘. 상·하위 바이트를 같은 가중치 적재로 한 번에 지나간다 (사슬 = 화소 수 x zmm 수 x 2).
+//  OB 1 (출력 8채널 이하, 마지막 층): zmm 하위 절반 = 상위 바이트 누산, 상위 절반 = 하위 바이트 누산 (가중치 8줄을 두 절반에 복제).
+//  각 줄의 int32 누산은 conv3x3Vnni 와 같은 곱의 합 (vpdpwssd 는 비포화 랩 덧셈, 최종 합 |.| <= 255*L1 <= 2^31-1 을 적재 시 확인) 이라 값이 같다.
+//  마무리는 int64 8줄로 conv3Finish 와 같은 식 (bo + ((Sh*256 + Sl) << 8), floor((x + 2^(sh-1)) / 2^sh) = 산술 시프트, clamp16). 1 <= sh <= 62 가 아니면 conv3Finish.
+// yvvyee: NNI_T512 은 위에서 정의
+template <int OB, int RY, int RX> __attribute__((target(NNI_T512))) inline __attribute__((always_inline))
+void conv3x3ZBlk(const C3L &L, const uint32_t *XH, const uint32_t *XL, int Wp, int Y, int X, int16_t *o16, int64_t *o64, int ostr, bool vfin)
+{
+  constexpr int NZ = OB == 1 ? 1 : OB / 2, NPX = RY * RX;
+  const int NP = L.NP; const int32_t *wk = L.wpk.data();
+  __m512i ah[NPX][NZ], al[NPX][NZ]; int off[NPX];
+  for (int px = 0; px < NPX; px++) { off[px] = ((Y + px / RX) * Wp + X + px % RX) * NP; for (int z = 0; z < NZ; z++) { ah[px][z] = _mm512_setzero_si512(); al[px][z] = _mm512_setzero_si512(); } }
+  for (int t = 0; t < 9; t++)
+  {
+    const int toff = ((t / 3) * Wp + t % 3) * NP; const int32_t *wt = wk + t * NP * OB * 8;
+    for (int cp = 0; cp < NP; cp++)
+    {
+      if (OB == 1)
+      {
+        const __m512i W = _mm512_broadcast_i64x4(_mm256_loadu_si256((const __m256i *) (wt + cp * 8)));
+        for (int px = 0; px < NPX; px++)
+        {
+          const int q = off[px] + toff + cp; const __m512i b = _mm512_mask_set1_epi32(_mm512_set1_epi32((int) XH[q]), (__mmask16) 0xFF00, (int) XL[q]);
+          ah[px][0] = _mm512_dpwssd_epi32(ah[px][0], b, W);
+        }
+      }
+      else
+      {
+        __m512i W[NZ]; for (int z = 0; z < NZ; z++) W[z] = _mm512_loadu_si512((const void *) (wt + cp * OB * 8 + 16 * z));
+        for (int px = 0; px < NPX; px++)
+        {
+          const int q = off[px] + toff + cp; const __m512i bh = _mm512_set1_epi32((int) XH[q]), bl = _mm512_set1_epi32((int) XL[q]);
+          for (int z = 0; z < NZ; z++) { ah[px][z] = _mm512_dpwssd_epi32(ah[px][z], bh, W[z]); al[px][z] = _mm512_dpwssd_epi32(al[px][z], bl, W[z]); }
+        }
+      }
+    }
+  }
+  if (OB >= 2 && vfin)   // yvvyee: o16 이고 Co == 8*OB
+  {
+    const __m128i shc = _mm_cvtsi32_si128(L.sh); const __m512i hr = _mm512_set1_epi64(1LL << (L.sh - 1)), lo = _mm512_set1_epi64(-32767), hi = _mm512_set1_epi64(32767);
+    for (int px = 0; px < NPX; px++)
+    {
+      int16_t *d = o16 + ((Y + px / RX) * ostr + X + px % RX) * L.Co;
+      for (int z = 0; z < NZ; z++) for (int hf = 0; hf < 2; hf++)
+      {
+        const __m512i h64 = _mm512_cvtepi32_epi64(hf ? _mm512_extracti64x4_epi64(ah[px][z], 1) : _mm512_castsi512_si256(ah[px][z]));
+        const __m512i l64 = _mm512_cvtepi32_epi64(hf ? _mm512_extracti64x4_epi64(al[px][z], 1) : _mm512_castsi512_si256(al[px][z]));
+        __m512i v = _mm512_slli_epi64(_mm512_add_epi64(_mm512_slli_epi64(h64, 8), l64), 8);
+        v = _mm512_add_epi64(v, _mm512_loadu_si512((const void *) (L.bo.data() + 16 * z + 8 * hf)));
+        v = _mm512_sra_epi64(_mm512_add_epi64(v, hr), shc); v = _mm512_min_epi64(_mm512_max_epi64(v, lo), hi);
+        _mm_storeu_si128((__m128i *) (d + 16 * z + 8 * hf), _mm512_cvtepi64_epi16(v));
+      }
+    }
+    return;
+  }
+  for (int px = 0; px < NPX; px++)
+  {
+    alignas(64) int32_t Sh[16 * NZ], Sl[16 * NZ]; const int32_t *pSl = Sl;
+    if (OB == 1) { _mm512_store_si512((void *) Sh, ah[px][0]); pSl = Sh + 8; }   // yvvyee: 하위 절반 = 상위 바이트, 상위 절반 = 하위 바이트
+    else for (int z = 0; z < NZ; z++) { _mm512_store_si512((void *) (Sh + 16 * z), ah[px][z]); _mm512_store_si512((void *) (Sl + 16 * z), al[px][z]); }
+    const int YY = Y + px / RX, XX = X + px % RX;
+    conv3Finish(L, Sh, pSl, o16 ? o16 + (YY * ostr + XX) * L.Co : nullptr, o64 ? o64 + YY * ostr + XX : nullptr);
+  }
+}
+// yvvyee: 화소 묶음 RY x RX (OB 1·2: 2x4, OB 4: 1x4 — zmm 레지스터 32개 안), 나머지는 1x1
+template <int OB> __attribute__((target(NNI_T512))) void conv3x3Z(const C3L &L, const uint32_t *XH, const uint32_t *XL, int Wp, int y0, int x0, int ny, int nx, int16_t *o16, int64_t *o64, int ostr)
+{
+  constexpr int RY = OB == 4 ? 1 : 2, RX = 4;
+  const bool vfin = o16 && OB >= 2 && L.Co == 8 * OB && L.sh >= 1 && L.sh <= 62;
+  int Y = y0;
+  for (; Y + RY <= y0 + ny; Y += RY)
+  {
+    int X = x0;
+    for (; X + RX <= x0 + nx; X += RX) conv3x3ZBlk<OB, RY, RX>(L, XH, XL, Wp, Y, X, o16, o64, ostr, vfin);
+    for (; X < x0 + nx; X++) for (int r = 0; r < RY; r++) conv3x3ZBlk<OB, 1, 1>(L, XH, XL, Wp, Y + r, X, o16, o64, ostr, vfin);
+  }
+  for (; Y < y0 + ny; Y++) for (int X = x0; X < x0 + nx; X++) conv3x3ZBlk<OB, 1, 1>(L, XH, XL, Wp, Y, X, o16, o64, ostr, vfin);
+}
 void conv3x3F(int simd, const C3L &L, const uint32_t *XH, const uint32_t *XL, int Wp, int y0, int x0, int ny, int nx, int16_t *o16, int64_t *o64, int ostr)
 {
+  if (simd >= 3) { switch (L.OB) { case 1: conv3x3Z<1>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 2: conv3x3Z<2>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 4: conv3x3Z<4>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; default: break; } }   // yvvyee: AVX-512 (2026-11-04)
   if (simd == 2) { switch (L.OB) { case 1: conv3x3Vnni<1>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 2: conv3x3Vnni<2>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 4: conv3x3Vnni<4>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; default: break; } }
   if (simd >= 1) { switch (L.OB) { case 1: conv3x3Avx2<1>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 2: conv3x3Avx2<2>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; case 4: conv3x3Avx2<4>(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr); return; default: break; } }
   conv3x3Scalar(L, XH, XL, Wp, y0, x0, ny, nx, o16, o64, ostr);
@@ -894,15 +1025,174 @@ void filtActBase(const FaP &P, const int16_t *x, int Hh, int Ww, int16_t *y, Wor
   if (fc == 32) filtActBody<32>(P, x, Hh, Ww, y, w, fc); else if (fc == 16) filtActBody<16>(P, x, Hh, Ww, y, w, fc); else filtActBody<0>(P, x, Hh, Ww, y, w, fc);
 }
 // yvvyee: AVX2 판은 fc 16·32 만, 그 밖은 기본 판
+// yvvyee: FiltAct AVX-512 판 (NNI_SIMD 3, fc 16·32). 단계·항·반올림·포화는 filtActAvx2 와 같고, 탭 쌍 곱 합은 vpdpwssd (= add(acc, madd), 비포화 랩 덧셈이라 같은 값).
+//  fc 16: zmm 하나 = 이웃 두 화소 x 16채널 (256비트 절반이 화소 하나). fc 32: zmm 하나 = 화소 하나.
+//  unpack/packs 는 128비트 줄마다 동작하므로 각 줄 안의 채널 순서 복원은 AVX2 판과 같다.
+//  A (hu 가로): 0삽입 업샘플의 짝·홀 출력 열 2j, 2j+1 을 원천 행의 반사 패딩판 PX[q] = x[reflI(2q-6, W2)/2] (q = 0..Ww+5) 에서 읽는다.
+//     출력 2j = sum_i PX[j+i] * hu2[2i], 출력 2j+1 = sum_i PX[j+i+1] * hu2[2i+1] (i = 0..5). 반사는 홀짝을 보존하므로 원식의 (m 짝수인 k) 항 집합과 같다.
+//  C·D (lrelu 뒤 hd 가로): 출력 j 의 탭 k 원천 열은 reflI(2j+k-6, W2). 탭 쌍 (2p, 2p+1) 의 두 열을 엮어 둔 반사 패딩판 PI[q] (q = j+p) 에서 읽는다 (아래 B 주석).
+#define NNI_FCPAD (28 + 6)
+struct FaZ { int n; const int16_t *a[6], *b[6]; __m512i T[6]; };
+__attribute__((target(NNI_T512))) inline __m512i faT2(int32_t t0, int32_t t1) { return _mm512_set1_epi32((int32_t) (((uint32_t) t0 & 0xffff) | ((uint32_t) t1 << 16))); }
+__attribute__((target(NNI_T512))) inline void faAccZ(const FaZ &q, int off, __m512i &l, __m512i &h)
+{
+  for (int m = 0; m < q.n; m++)
+  {
+    const __m512i a = _mm512_loadu_si512((const void *) (q.a[m] + off)), b = _mm512_loadu_si512((const void *) (q.b[m] + off));
+    l = _mm512_dpwssd_epi32(l, _mm512_unpacklo_epi16(a, b), q.T[m]); h = _mm512_dpwssd_epi32(h, _mm512_unpackhi_epi16(a, b), q.T[m]);
+  }
+}
+__attribute__((target(NNI_T512))) inline __m512i faRndZ(__m512i v, __m512i h, __m128i sh)   // clamp16((v + h) >> sh)
+{
+  return _mm512_min_epi32(_mm512_max_epi32(_mm512_sra_epi32(_mm512_add_epi32(v, h), sh), _mm512_set1_epi32(-32767)), _mm512_set1_epi32(32767));
+}
+__attribute__((target(NNI_T512))) inline __m512i faCombZ(__m512i p, __m512i nv, __m128i sD, __m128i sD8, __m512i mP, __m512i mN, __m512i hD)
+{
+  const __m512i c51 = _mm512_set1_epi32(51);
+  const __m512i Ph = _mm512_sra_epi32(p, sD8), Pl = _mm512_and_si512(p, mP), Nh = _mm512_sra_epi32(nv, sD), Nl = _mm512_and_si512(nv, mN);
+  const __m512i R = _mm512_add_epi32(_mm512_add_epi32(_mm512_slli_epi32(Pl, 8), _mm512_mullo_epi32(Nl, c51)), hD);
+  const __m512i v = _mm512_add_epi32(_mm512_add_epi32(Ph, _mm512_mullo_epi32(Nh, c51)), _mm512_sra_epi32(R, sD));
+  return _mm512_min_epi32(_mm512_max_epi32(v, _mm512_set1_epi32(-32767)), _mm512_set1_epi32(32767));
+}
+__attribute__((target(NNI_T512))) inline void faMkPairsZ(FaZ &q, const int16_t *const *src, const int32_t *tp, int n)
+{
+  q.n = (n + 1) / 2;
+  for (int m = 0; m < q.n; m++) { const int k0 = 2 * m, k1 = 2 * m + 1; q.a[m] = src[k0]; q.b[m] = k1 < n ? src[k1] : src[k0]; q.T[m] = faT2(tp[k0], k1 < n ? tp[k1] : 0); }
+}
+template <int FC> __attribute__((target(NNI_T512))) void filtAct512(const FaP &P, const int16_t *x, int Hh, int Ww, int16_t *y, Work &w)
+{
+  constexpr int PV = 32 / FC;   // yvvyee: zmm 하나에 든 화소 수
+  const int H2 = 2 * Hh, W2 = 2 * Ww;
+  const __m128i sA = _mm_cvtsi32_si128(P.sA), sB = _mm_cvtsi32_si128(P.sB), sD = _mm_cvtsi32_si128(P.sD), sD8 = _mm_cvtsi32_si128(P.sD - 8), sE = _mm_cvtsi32_si128(P.sE);
+  const __m512i hA = _mm512_set1_epi32(1 << (P.sA - 1)), hB = _mm512_set1_epi32(1 << (P.sB - 1)), hE = _mm512_set1_epi32(1 << (P.sE - 1)), hD = _mm512_set1_epi32(1 << (P.sD - 1));
+  const __m512i mP = _mm512_set1_epi32((1 << (P.sD - 8)) - 1), mN = _mm512_set1_epi32((1 << P.sD) - 1), z = _mm512_setzero_si512();
+  thread_local int16_t PX[NNI_FCPAD * FCMAX], PI[2][NNI_FCPAD * 2 * FCMAX];   // yvvyee: PI [양/음][q][열 쌍 x 채널]
+  const __m512i ilv = _mm512_set_epi16(31, 15, 30, 14, 29, 13, 28, 12, 27, 11, 26, 10, 25, 9, 24, 8, 23, 7, 22, 6, 21, 5, 20, 4, 19, 3, 18, 2, 17, 1, 16, 0);   // yvvyee: int16 2c <- c, 2c+1 <- 16+c
+  int16_t *tA = w.tA, *t2 = w.t2; const int16_t *src[12]; int32_t tp[12]; FaZ q;
+  // A: tA[i][xx] = 원 t[2i][xx]
+  __m512i TA[3], TE[3], TO[3];   // yvvyee: fc 16 은 TA (하위 절반 짝 출력 탭, 상위 절반 홀 출력 탭), fc 32 는 TE (짝 출력) / TO (홀 출력)
+  for (int p = 0; p < 3; p++)
+  {
+    TE[p] = faT2(P.hu2[4 * p], P.hu2[4 * p + 2]); TO[p] = faT2(P.hu2[4 * p + 1], P.hu2[4 * p + 3]);
+    TA[p] = _mm512_inserti64x4(TE[p], _mm512_castsi512_si256(TO[p]), 1);
+  }
+  for (int i = 0; i < Hh; i++)
+  {
+    for (int qq = 0; qq < Ww + 6; qq++) memcpy(PX + qq * FC, x + (i * Ww + (reflI(2 * qq - 6, W2) >> 1)) * FC, FC * sizeof(int16_t));
+    for (int j = 0; j < Ww; j++)
+    {
+      int16_t *d = tA + (i * W2 + 2 * j) * FC;
+      if (FC == 16)
+      {
+        __m512i l = z, h = z;
+        for (int p = 0; p < 3; p++) { const __m512i a = _mm512_loadu_si512((const void *) (PX + (j + 2 * p) * 16)), b = _mm512_loadu_si512((const void *) (PX + (j + 2 * p + 1) * 16));
+          l = _mm512_dpwssd_epi32(l, _mm512_unpacklo_epi16(a, b), TA[p]); h = _mm512_dpwssd_epi32(h, _mm512_unpackhi_epi16(a, b), TA[p]); }
+        _mm512_storeu_si512((void *) d, _mm512_packs_epi32(faRndZ(l, hA, sA), faRndZ(h, hA, sA)));
+      }
+      else
+      {
+        for (int od = 0; od < 2; od++)
+        {
+          __m512i l = z, h = z;
+          for (int p = 0; p < 3; p++) { const __m512i a = _mm512_loadu_si512((const void *) (PX + (j + od + 2 * p) * 32)), b = _mm512_loadu_si512((const void *) (PX + (j + od + 2 * p + 1) * 32));
+            l = _mm512_dpwssd_epi32(l, _mm512_unpacklo_epi16(a, b), od ? TO[p] : TE[p]); h = _mm512_dpwssd_epi32(h, _mm512_unpackhi_epi16(a, b), od ? TO[p] : TE[p]); }
+          _mm512_storeu_si512((void *) (d + od * 32), _mm512_packs_epi32(faRndZ(l, hA, sA), faRndZ(h, hA, sA)));
+        }
+      }
+    }
+  }
+  __m512i TD[6]; for (int p = 0; p < 6; p++) TD[p] = faT2(P.hd[2 * p], P.hd[2 * p + 1]);
+  for (int yy = 0; yy < H2; yy++)
+  {
+    int n = 0;
+    for (int k = 0; k < 12; k++) { const int m = reflI(yy + k - 6, H2); if (!(m & 1)) { src[n] = tA + (m >> 1) * W2 * FC; tp[n] = P.hu2[k]; n++; } }
+    faMkPairsZ(q, src, tp, n);
+    // yvvyee: B: 원 a[yy][xx], a[yy][xx+1] (xx 짝수) 의 양·음 부분을 열 쌍 엮음판 PI[s][q] (q = (xx+6)/2) 에. 짝수 int16 = 열 xx, 홀수 = 열 xx+1 이라
+    //   C·D 의 탭 쌍 (hd[2p], hd[2p+1]) 원천 (열 2(j+p)-6, 2(j+p)-5) 이 PI[s][j+p] 하나로 읽혀 unpack 이 없다.
+    //   fc 16: vpermw 로 (열 xx 채널 c, 열 xx+1 채널 c) 를 int16 2c, 2c+1 에 -> C·D 의 int32 줄 = 채널 순서.
+    //   fc 32: zmm 둘 = unpacklo/hi(열 xx, 열 xx+1) (AVX2 판 faAcc 의 l/h 와 같은 배치, C·D 끝 packs 가 채널 순서를 되돌린다).
+    for (int xx = 0; xx < W2; xx += 2)
+    {
+      if (FC == 16)
+      {
+        __m512i l = z, h = z; faAccZ(q, xx * 16, l, h);
+        const __m512i r = _mm512_permutexvar_epi16(ilv, _mm512_packs_epi32(faRndZ(l, hB, sB), faRndZ(h, hB, sB))); const int o = ((xx + 6) >> 1) * 32;
+        _mm512_storeu_si512((void *) (PI[0] + o), _mm512_max_epi16(r, z)); _mm512_storeu_si512((void *) (PI[1] + o), _mm512_min_epi16(r, z));
+      }
+      else
+      {
+        __m512i l0 = z, h0 = z, l1 = z, h1 = z; faAccZ(q, xx * 32, l0, h0); faAccZ(q, xx * 32 + 32, l1, h1);
+        const __m512i re = _mm512_packs_epi32(faRndZ(l0, hB, sB), faRndZ(h0, hB, sB)), ro = _mm512_packs_epi32(faRndZ(l1, hB, sB), faRndZ(h1, hB, sB));
+        const __m512i a = _mm512_unpacklo_epi16(re, ro), b = _mm512_unpackhi_epi16(re, ro); const int o = ((xx + 6) >> 1) * 64;
+        _mm512_storeu_si512((void *) (PI[0] + o), _mm512_max_epi16(a, z)); _mm512_storeu_si512((void *) (PI[0] + o + 32), _mm512_max_epi16(b, z));
+        _mm512_storeu_si512((void *) (PI[1] + o), _mm512_min_epi16(a, z)); _mm512_storeu_si512((void *) (PI[1] + o + 32), _mm512_min_epi16(b, z));
+      }
+    }
+    // yvvyee: 반사 패딩 q < 3, q >= Ww+3. 열 홀짝 par 칸 = 열 reflI(2q+par-6, W2) (반사는 홀짝 보존이라 원천도 par 칸, 원천 q' = (c+6-par)/2 는 안쪽)
+    for (int qq = 0; qq < Ww + 6; qq++)
+    {
+      if (qq == 3) qq = Ww + 3;
+      for (int par = 0; par < 2; par++)
+      {
+        const int c = reflI(2 * qq + par - 6, W2), cq = (c + 6 - par) >> 1; const __mmask32 m = par ? (__mmask32) 0xAAAAAAAAu : (__mmask32) 0x55555555u;
+        for (int s = 0; s < 2; s++) for (int v = 0; v < FC / 16; v++)
+        {
+          int16_t *d = PI[s] + qq * 2 * FC + 32 * v; const int16_t *sp = PI[s] + cq * 2 * FC + 32 * v;
+          _mm512_storeu_si512((void *) d, _mm512_mask_mov_epi16(_mm512_loadu_si512((const void *) d), m, _mm512_loadu_si512((const void *) sp)));
+        }
+      }
+    }
+    if (FC == 16)   // C·D: 원 t[yy][2j], 화소 둘씩 (누산 사슬 4개)
+    {
+      for (int j = 0; j < Ww; j += 2)
+      {
+        __m512i p0 = z, n0 = z, p1 = z, n1 = z;
+        for (int p = 0; p < 6; p++)
+        {
+          const int o = (j + p) * 32;
+          p0 = _mm512_dpwssd_epi32(p0, _mm512_loadu_si512((const void *) (PI[0] + o)), TD[p]); n0 = _mm512_dpwssd_epi32(n0, _mm512_loadu_si512((const void *) (PI[1] + o)), TD[p]);
+          p1 = _mm512_dpwssd_epi32(p1, _mm512_loadu_si512((const void *) (PI[0] + o + 32)), TD[p]); n1 = _mm512_dpwssd_epi32(n1, _mm512_loadu_si512((const void *) (PI[1] + o + 32)), TD[p]);
+        }
+        int16_t *d = t2 + (yy * Ww + j) * 16;   // yvvyee: faCombZ 가 clamp16 한 뒤라 vpmovdw (절단) 가 값을 바꾸지 않는다
+        _mm256_storeu_si256((__m256i *) d, _mm512_cvtepi32_epi16(faCombZ(p0, n0, sD, sD8, mP, mN, hD))); _mm256_storeu_si256((__m256i *) (d + 16), _mm512_cvtepi32_epi16(faCombZ(p1, n1, sD, sD8, mP, mN, hD)));
+      }
+    }
+    else
+    {
+      for (int j = 0; j < Ww; j++)
+      {
+        __m512i pl = z, ph = z, nl = z, nh = z;
+        for (int p = 0; p < 6; p++)
+        {
+          const int o = (j + p) * 64;
+          pl = _mm512_dpwssd_epi32(pl, _mm512_loadu_si512((const void *) (PI[0] + o)), TD[p]); ph = _mm512_dpwssd_epi32(ph, _mm512_loadu_si512((const void *) (PI[0] + o + 32)), TD[p]);
+          nl = _mm512_dpwssd_epi32(nl, _mm512_loadu_si512((const void *) (PI[1] + o)), TD[p]); nh = _mm512_dpwssd_epi32(nh, _mm512_loadu_si512((const void *) (PI[1] + o + 32)), TD[p]);
+        }
+        _mm512_storeu_si512((void *) (t2 + (yy * Ww + j) * 32), _mm512_packs_epi32(faCombZ(pl, nl, sD, sD8, mP, mN, hD), faCombZ(ph, nh, sD, sD8, mP, mN, hD)));
+      }
+    }
+  }
+  for (int i = 0; i < Hh; i++)   // E: 원 a[2i][2j]
+  {
+    for (int k = 0; k < 12; k++) src[k] = t2 + reflI(2 * i + k - 6, H2) * Ww * FC;
+    faMkPairsZ(q, src, P.hd, 12);
+    for (int j = 0; j < Ww; j += PV)
+    {
+      __m512i l = z, h = z; faAccZ(q, j * FC, l, h);
+      _mm512_storeu_si512((void *) (y + (i * Ww + j) * FC), _mm512_packs_epi32(faRndZ(l, hE, sE), faRndZ(h, hE, sE)));
+    }
+  }
+}
 void filtActF(int simd, const FaP &P, const int16_t *x, int Hh, int Ww, int16_t *y, Work &w, int fc)
 {
+  if (simd >= 3 && fc == 32) { filtAct512<32>(P, x, Hh, Ww, y, w); return; } if (simd >= 3 && fc == 16) { filtAct512<16>(P, x, Hh, Ww, y, w); return; }   // yvvyee: AVX-512 (2026-11-04)
   if (simd >= 1 && fc == 32) filtActAvx2<2>(P, x, Hh, Ww, y, w); else if (simd >= 1 && fc == 16) filtActAvx2<1>(P, x, Hh, Ww, y, w); else filtActBase(P, x, Hh, Ww, y, w, fc);
 }
 } // namespace
 
 struct NNInterp::Fast
 {
-  int simd = 0;   // yvvyee: 0 스칼라, 1 AVX2, 2 AVX2 + AVX-VNNI
+  int simd = 0;   // yvvyee: 0 스칼라, 1 AVX2, 2 AVX2 + AVX-VNNI, 3 AVX-512 (avx512f, avx512bw, avx512_vnni; 3x3 합성곱·FiltAct 만 512비트, 나머지는 AVX2 경로)
   int fc = 32;    // yvvyee: L7 중간 채널 수 (conv_corr_0 출력 = conv_corr_2..6 입력·출력 = conv_corr_8 입력). 16 또는 32
   const Arr *g06, *g12, *g24, *g10, *k12, *k7, *cdx, *cdy, *phiM, *D, *tabB, *rth;
   int K, eSq[4], ePhi[4], ePhin, eSt0, eSt, ephi, eD, eIn, sc4 = 0; int64_t gate;
@@ -981,10 +1271,13 @@ void NNInterp::buildFast()
     }
   }
   f.simd = 0;
+  bool vnni256 = false;   // yvvyee: AVX-VNNI (256비트) 유무. AVX-512 는 있고 AVX-VNNI 는 없는 CPU 에서 NNI_SIMD=2 로 낮출 때 1 로 내린다
 #if defined(__x86_64__) || defined(__i386__)
-  __builtin_cpu_init(); if (__builtin_cpu_supports("avx2")) f.simd = __builtin_cpu_supports("avxvnni") ? 2 : 1;
+  __builtin_cpu_init(); if (__builtin_cpu_supports("avx2")) { vnni256 = __builtin_cpu_supports("avxvnni"); f.simd = vnni256 ? 2 : 1;
+    if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vnni")) f.simd = 3; }   // yvvyee: AVX-512 (2026-11-04)
 #endif
   if (getenv("NNI_SIMD")) f.simd = std::min(f.simd, atoi(getenv("NNI_SIMD")));   // yvvyee: 시험용 (0/1 로 낮춰 경로별 비트 일치 확인)
+  if (f.simd == 2 && !vnni256) f.simd = 1;
   if (!getenv("NNI_REF")) m_fast = F;   // yvvyee: NNI_REF 가 있으면 기준 구현만 쓴다 (시험용)
   if (getenv("NNI_VERBOSE")) fprintf(stderr, "NNInterp: fast=%d fc=%d simd=%d\n", m_fast ? 1 : 0, f.fc, f.simd);   // yvvyee: 시험용 (가속 경로 사용 여부 확인)
 }
@@ -1122,11 +1415,12 @@ void NNInterp::predict(const BlockIn &in, BlockOut &out) const
       d[11] = 0;
     }
     const int Wp = Cx + 2;
-    packPad(a0, Cy, Cx, 12, F.c3[0].NP, w.XH, w.XL); conv3x3F(F.simd, F.c3[0], w.XH, w.XL, Wp, 0, 0, Cy, Cx, w.act, nullptr, Cx);
+    (F.simd >= 3 ? packPadZ : packPad)(a0, Cy, Cx, 12, F.c3[0].NP, w.XH, w.XL);   // yvvyee: AVX-512 (2026-11-04)
+    conv3x3F(F.simd, F.c3[0], w.XH, w.XL, Wp, 0, 0, Cy, Cx, w.act, nullptr, Cx);
     for (int l = 0; l < 4; l++)
     {
       filtActF(F.simd, F.fa[l], w.act, Cy, Cx, w.fa, w, F.fc);
-      packPad(w.fa, Cy, Cx, F.fc, F.c3[l + 1].NP, w.XH, w.XL);
+      (F.simd >= 3 ? packPadZ : packPad)(w.fa, Cy, Cx, F.fc, F.c3[l + 1].NP, w.XH, w.XL);   // yvvyee: AVX-512 (2026-11-04)
       if (l < 3) conv3x3F(F.simd, F.c3[l + 1], w.XH, w.XL, Wp, 0, 0, Cy, Cx, w.act, nullptr, Cx);
       else conv3x3F(F.simd, F.c3[4], w.XH, w.XL, Wp, 6, 6, th, tw, nullptr, w.c4, Cx);   // yvvyee: 마지막 층은 L8 이 읽는 타일 영역만
     }
