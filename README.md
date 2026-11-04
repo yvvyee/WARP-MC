@@ -13,6 +13,12 @@ WARP-MC (Wiener-gain, Attention-over-offsets, Rate-gated, Per-hypothesis Motion 
 | `checkpoints/` | Training checkpoints of the two exported models (seed 0). |
 | `scripts/` | Encoding runs: reduced CTC class D (`server19/`), 2-second CTC protocol (`server147/`), training launchers (`train/`). |
 
+## GPU path and proxy evaluation (experimental)
+
+`codec/source/Lib/CommonLib/NNInterpCuda.{h,cu}` is a CUDA batch evaluator that is bit-exact with the scalar reference. Build with `-DNNI_CUDA=ON` (CMake option in `source/Lib/CommonLib/CMakeLists.txt`, CUDA architectures 80 and 120) and enable at run time with `VTM_NNINTERP_GPU=1` and `VTM_NNINTERP_GPU_DEV=<device>`. Several processes sharing one GPU need the MPS daemon. `kernel_tests/gpu/gpu_test.cpp` checks the GPU path against the tile reference and the scalar reference and measures throughput per batch size. `scripts/server147/c2s_run_gpu.sh` runs the 2-second protocol with a mix of GPU and CPU processes.
+
+`codec/proxy_rdo.patch` (against the sources in `codec/source/`) adds `VTM_NNINTERP_PROXY=1`, which evaluates only the linear stages of the model in the screening stages of the encoder search. It is under evaluation and is not used in reported results.
+
 ## Build
 
 Apply the patch to a clean VTM-23.8 tree (or copy the files in `codec/source/` over it) and build with OpenMP:

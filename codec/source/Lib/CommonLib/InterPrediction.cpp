@@ -42,6 +42,9 @@
 #include <cstring>
 #include <vector>
 #include "NNInterp.h"
+#if NNI_CUDA
+#include "NNInterpCuda.h"   // yvvyee: GPU 타일 일괄 평가 (-DNNI_CUDA=ON 빌드에서만)
+#endif
 
 #include "Buffer.h"
 #include "UnitTools.h"
@@ -742,10 +745,66 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
       if (it != s_cache.m.end()) { outs[ti] = it->second; hit[ti] = 1; s_cache.hits++; } else s_cache.miss++;
     }
   }
-#pragma omp parallel for schedule(dynamic) num_threads(s_threads) firstprivate(in) private(out) if (s_threads > 1 && ntiles > 1)
+  // yvvyee: GPU 경로 (VTM_NNINTERP_GPU=1, -DNNI_CUDA=ON 빌드). 캐시 미스 타일의 BlockIn 을 고정 버퍼에 채우고(창 채우기는 OMP 유지)
+  //   predictBatch 한 번으로 평가한다. 출력은 predictRef 와 비트 동일이므로 이후 캐시·출력 처리는 CPU 경로와 같다.
+  //   적재 실패·호출 실패 시 CPU 경로. VTM_NNINTERP_DBG (덤프) 사용 시 CPU 경로. 장치는 VTM_NNINTERP_GPU_DEV (기본 0).
+  bool gpuDone = false;
+#if NNI_CUDA
+  {
+    static NNInterpCuda *s_gpu = nullptr; static bool s_gpuTried = false;
+    static NNInterp::BlockIn *s_gin = nullptr; static std::vector<NNInterp::BlockOut> s_gout; static int s_gcap = 0;
+    if (!s_gpuTried)
+    {
+      s_gpuTried = true;
+      const char *g = getenv("VTM_NNINTERP_GPU"), *dir = getenv("VTM_NNINTERP_DIR");
+      if (g && atoi(g) == 1 && dir && !getenv("VTM_NNINTERP_DBG"))
+      {
+        const char *dv = getenv("VTM_NNINTERP_GPU_DEV"); s_gpu = new NNInterpCuda();
+        if (!s_gpu->load(dir, dv ? atoi(dv) : 0)) { fprintf(stderr, "NNInterpCuda: load failed (%s), CPU path\n", s_gpu->lastError()); delete s_gpu; s_gpu = nullptr; }
+        else fprintf(stderr, "NNInterpCuda: GPU path on device %d\n", dv ? atoi(dv) : 0);
+      }
+    }
+    std::vector<int> miss; miss.reserve(ntiles); for (int ti = 0; ti < ntiles; ti++) if (!hit[ti]) miss.push_back(ti);
+    const int nmiss = (int) miss.size();
+    if (s_gpu && nmiss > 0)
+    {
+      if (nmiss > s_gcap)
+      {
+        if (s_gin) NNInterpCuda::freePinned(s_gin);
+        s_gcap = std::max(64, nmiss); s_gin = (NNInterp::BlockIn *) NNInterpCuda::allocPinned(sizeof(NNInterp::BlockIn) * s_gcap); s_gout.resize(s_gcap);
+      }
+#pragma omp parallel for schedule(dynamic) num_threads(s_threads) if (s_threads > 1 && nmiss > 1)
+      for (int j = 0; j < nmiss; j++)
+      {
+        const int ti = miss[j];
+        const int bx = (ti % nbx) * tileSz, by = (ti / nbx) * tileSz;
+        const int tw = std::min(tileSz, width - bx), th = std::min(tileSz, height - by);
+        const int ww = tw + 16, wh = th + 16;
+        NNInterp::BlockIn &gi = s_gin[j];
+        gi.fx = in.fx; gi.fy = in.fy; gi.qp = in.qp; gi.imv = in.imv; gi.merge = in.merge; gi.dpoc = in.dpoc; gi.st = in.st; gi.w4 = in.w4; gi.h4 = in.h4;
+        gi.tw = tw; gi.th = th; gi.stride = ww;
+        const int ox = posInt.x + bx - 8, oy = posInt.y + by - 8;
+        for (int y = 0; y < wh; y++)
+          for (int x = 0; x < ww; x++)
+          {
+            const int cx = std::min(std::max(ox + x, 0), W - 1), cy = std::min(std::max(oy + y, 0), H - 1);
+            gi.win[y * ww + x] = fullRef.at(cx, cy);
+            gi.map[y * ww + x] = refPic->codeMap.at(cx, cy);
+          }
+      }
+      if (s_gpu->predictBatch(s_gin, s_gout.data(), nmiss, NNInterpCuda::OUT_Y))
+      {
+        for (int j = 0; j < nmiss; j++) memcpy(outs[miss[j]].data(), s_gout[j].y, sizeof(int64_t) * 256);
+        gpuDone = true;
+      }
+      else fprintf(stderr, "NNInterpCuda: predictBatch failed (%s), CPU path for this call\n", s_gpu->lastError());
+    }
+  }
+#endif
+#pragma omp parallel for schedule(dynamic) num_threads(s_threads) firstprivate(in) private(out) if (s_threads > 1 && ntiles > 1 && !gpuDone)
   for (int ti = 0; ti < ntiles; ti++)
     {
-      if (hit[ti]) continue;
+      if (hit[ti] || gpuDone) continue;
       const int bx = (ti % nbx) * tileSz, by = (ti / nbx) * tileSz;
       const int tw = std::min(tileSz, width - bx), th = std::min(tileSz, height - by);
       const int ww = tw + 16, wh = th + 16;
