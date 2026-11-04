@@ -1,0 +1,81 @@
+consts_i32 int32 1 7 consts_i32.bin
+cand_dx_q4 int32 1 25 cand_dx_q4.bin
+cand_dy_q4 int32 1 25 cand_dy_q4.bin
+const_log2e_q16 int32 1 1 const_log2e_q16.bin
+const_ln2_q16 int32 1 1 const_ln2_q16.bin
+const_inv30_q16 int32 1 1 const_inv30_q16.bin
+fir_gauss06 int16 1 5 fir_gauss06.bin
+fir_gauss12 int16 1 9 fir_gauss12.bin
+fir_gauss24 int16 1 17 fir_gauss24.bin
+fir_gauss10 int16 1 5 fir_gauss10.bin
+fir_filtact_hu_half int16 1 12 fir_filtact_hu_half.bin
+fir_filtact_hd int16 1 12 fir_filtact_hd.bin
+fir_kaiser16x12 int16 2 16 12 fir_kaiser16x12.bin
+alt_kernel7 int16 1 7 alt_kernel7.bin
+alt_gate_q15 int32 1 1 alt_gate_q15.bin
+rate_th_q4_by_qp int32 1 64 rate_th_q4_by_qp.bin
+mat_phi_i16 int16 2 25 5 mat_phi_i16.bin
+mat_phi_exp int32 1 1 mat_phi_exp.bin
+mat_d4_i16 int16 2 4 4 mat_d4_i16.bin
+mat_d4_exp int32 1 1 mat_d4_exp.bin
+conv_noise_0_w int16 4 32 28 1 1 conv_noise_0_w.bin
+conv_noise_0_wexp int32 1 1 conv_noise_0_wexp.bin
+conv_noise_0_b_q14 int32 1 32 conv_noise_0_b_q14.bin
+conv_noise_0_oexp int32 1 1 conv_noise_0_oexp.bin
+conv_noise_2_w int16 4 4 32 1 1 conv_noise_2_w.bin
+conv_noise_2_wexp int32 1 1 conv_noise_2_wexp.bin
+conv_noise_2_b_q14 int32 1 4 conv_noise_2_b_q14.bin
+conv_noise_2_oexp int32 1 1 conv_noise_2_oexp.bin
+conv_dq_0_w int16 4 32 24 1 1 conv_dq_0_w.bin
+conv_dq_0_wexp int32 1 1 conv_dq_0_wexp.bin
+conv_dq_0_b_q14 int32 1 32 conv_dq_0_b_q14.bin
+conv_dq_0_oexp int32 1 1 conv_dq_0_oexp.bin
+conv_dq_2_w int16 4 5 32 1 1 conv_dq_2_w.bin
+conv_dq_2_wexp int32 1 1 conv_dq_2_wexp.bin
+conv_dq_2_b_q14 int32 1 5 conv_dq_2_b_q14.bin
+conv_dq_2_oexp int32 1 1 conv_dq_2_oexp.bin
+conv_corr_0_w int16 4 16 11 3 3 conv_corr_0_w.bin
+conv_corr_0_wexp int32 1 1 conv_corr_0_wexp.bin
+conv_corr_0_b_q14 int32 1 16 conv_corr_0_b_q14.bin
+conv_corr_0_oexp int32 1 1 conv_corr_0_oexp.bin
+filtact_corr_1_oexp int32 1 2 filtact_corr_1_oexp.bin
+conv_corr_2_w int16 4 16 16 3 3 conv_corr_2_w.bin
+conv_corr_2_wexp int32 1 1 conv_corr_2_wexp.bin
+conv_corr_2_b_q14 int32 1 16 conv_corr_2_b_q14.bin
+conv_corr_2_oexp int32 1 1 conv_corr_2_oexp.bin
+filtact_corr_3_oexp int32 1 2 filtact_corr_3_oexp.bin
+conv_corr_4_w int16 4 16 16 3 3 conv_corr_4_w.bin
+conv_corr_4_wexp int32 1 1 conv_corr_4_wexp.bin
+conv_corr_4_b_q14 int32 1 16 conv_corr_4_b_q14.bin
+conv_corr_4_oexp int32 1 1 conv_corr_4_oexp.bin
+filtact_corr_5_oexp int32 1 2 filtact_corr_5_oexp.bin
+conv_corr_6_w int16 4 16 16 3 3 conv_corr_6_w.bin
+conv_corr_6_wexp int32 1 1 conv_corr_6_wexp.bin
+conv_corr_6_b_q14 int32 1 16 conv_corr_6_b_q14.bin
+conv_corr_6_oexp int32 1 1 conv_corr_6_oexp.bin
+filtact_corr_7_oexp int32 1 2 filtact_corr_7_oexp.bin
+conv_corr_8_w int16 4 1 16 3 3 conv_corr_8_w.bin
+conv_corr_8_wexp int32 1 1 conv_corr_8_wexp.bin
+conv_corr_8_b_q14 int32 1 1 conv_corr_8_b_q14.bin
+conv_corr_8_oexp int32 1 1 conv_corr_8_oexp.bin
+corr_in_exp int32 1 1 corr_in_exp.bin
+tab_log2bsz_q14 int32 1 32 tab_log2bsz_q14.bin
+energy_sq0_exp int32 1 1 energy_sq0_exp.bin
+energy_sq1_exp int32 1 1 energy_sq1_exp.bin
+energy_sq2_exp int32 1 1 energy_sq2_exp.bin
+energy_sq3_exp int32 1 1 energy_sq3_exp.bin
+energy_phi0_exp int32 1 1 energy_phi0_exp.bin
+energy_phi1_exp int32 1 1 energy_phi1_exp.bin
+energy_phi2_exp int32 1 1 energy_phi2_exp.bin
+energy_phi3_exp int32 1 1 energy_phi3_exp.bin
+energy_st0_exp int32 1 1 energy_st0_exp.bin
+energy_st_exp int32 1 1 energy_st_exp.bin
+energy_phin_exp int32 1 1 energy_phin_exp.bin
+lut_exp2_frac_q15 int32 1 256 lut_exp2_frac_q15.bin
+lut_log2_mant_q10 int32 1 1025 lut_log2_mant_q10.bin
+lut_recip_mant_q15 int32 1 1025 lut_recip_mant_q15.bin
+lut_sigmoid_q15 int32 1 8193 lut_sigmoid_q15.bin
+ref_idx int32 1 512 ref_idx.bin
+ref_y_q4 int32 3 512 4 4 ref_y_q4.bin
+ref_ylin_q4 int32 3 512 8 8 ref_ylin_q4.bin
+ref_xd_q4 int32 3 512 20 20 ref_xd_q4.bin

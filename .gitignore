@@ -66,3 +66,12 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# data and run outputs
+*.yuv
+*.bin.enc
+*.dmp
+*.i32
+*.pt.bak
+__pycache__/
+*.pyc

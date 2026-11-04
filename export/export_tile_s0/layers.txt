@@ -1,0 +1,9 @@
+noise_0 k1 in28 out32 pad0 zeros
+noise_2 k1 in32 out4 pad0 zeros
+dq_0 k1 in24 out32 pad0 zeros
+dq_2 k1 in32 out5 pad0 zeros
+corr_0 k3 in11 out32 pad1 reflect
+corr_2 k3 in32 out32 pad1 reflect
+corr_4 k3 in32 out32 pad1 reflect
+corr_6 k3 in32 out32 pad1 reflect
+corr_8 k3 in32 out1 pad1 reflect

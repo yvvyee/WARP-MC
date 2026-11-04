@@ -1,0 +1,11 @@
+Files VTM-23.8/source/Lib/CommonLib/DeblockingFilter.cpp and VTM-23.8_nn/source/Lib/CommonLib/DeblockingFilter.cpp differ
+Files VTM-23.8/source/Lib/CommonLib/InterPrediction.cpp and VTM-23.8_nn/source/Lib/CommonLib/InterPrediction.cpp differ
+Files VTM-23.8/source/Lib/CommonLib/InterPrediction.h and VTM-23.8_nn/source/Lib/CommonLib/InterPrediction.h differ
+Only in VTM-23.8_nn/source/Lib/CommonLib: NNInterp.cpp
+Only in VTM-23.8_nn/source/Lib/CommonLib: NNInterp.h
+Files VTM-23.8/source/Lib/CommonLib/Picture.h and VTM-23.8_nn/source/Lib/CommonLib/Picture.h differ
+Only in VTM-23.8_nn/source/Lib/CommonLib: RefCodeMap.cpp
+Only in VTM-23.8_nn/source/Lib/CommonLib: RefCodeMap.h
+Files VTM-23.8/source/Lib/CommonLib/UnitTools.cpp and VTM-23.8_nn/source/Lib/CommonLib/UnitTools.cpp differ
+Files VTM-23.8/source/Lib/EncoderLib/InterSearch.cpp and VTM-23.8_nn/source/Lib/EncoderLib/InterSearch.cpp differ
+Files VTM-23.8/source/Lib/EncoderLib/InterSearch.h and VTM-23.8_nn/source/Lib/EncoderLib/InterSearch.h differ
