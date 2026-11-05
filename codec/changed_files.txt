@@ -1,11 +1,16 @@
-Files VTM-23.8/source/Lib/CommonLib/DeblockingFilter.cpp and VTM-23.8_nn/source/Lib/CommonLib/DeblockingFilter.cpp differ
-Files VTM-23.8/source/Lib/CommonLib/InterPrediction.cpp and VTM-23.8_nn/source/Lib/CommonLib/InterPrediction.cpp differ
-Files VTM-23.8/source/Lib/CommonLib/InterPrediction.h and VTM-23.8_nn/source/Lib/CommonLib/InterPrediction.h differ
-Only in VTM-23.8_nn/source/Lib/CommonLib: NNInterp.cpp
-Only in VTM-23.8_nn/source/Lib/CommonLib: NNInterp.h
-Files VTM-23.8/source/Lib/CommonLib/Picture.h and VTM-23.8_nn/source/Lib/CommonLib/Picture.h differ
-Only in VTM-23.8_nn/source/Lib/CommonLib: RefCodeMap.cpp
-Only in VTM-23.8_nn/source/Lib/CommonLib: RefCodeMap.h
-Files VTM-23.8/source/Lib/CommonLib/UnitTools.cpp and VTM-23.8_nn/source/Lib/CommonLib/UnitTools.cpp differ
-Files VTM-23.8/source/Lib/EncoderLib/InterSearch.cpp and VTM-23.8_nn/source/Lib/EncoderLib/InterSearch.cpp differ
-Files VTM-23.8/source/Lib/EncoderLib/InterSearch.h and VTM-23.8_nn/source/Lib/EncoderLib/InterSearch.h differ
+source/Lib/CommonLib/CMakeLists.txt
+source/Lib/CommonLib/DeblockingFilter.cpp
+source/Lib/CommonLib/InterPrediction.cpp
+source/Lib/CommonLib/InterPrediction.h
+source/Lib/CommonLib/NNInterp.cpp
+source/Lib/CommonLib/NNInterpCuda.cu
+source/Lib/CommonLib/NNInterpCuda.h
+source/Lib/CommonLib/NNInterp.h
+source/Lib/CommonLib/Picture.h
+source/Lib/CommonLib/RefCodeMap.cpp
+source/Lib/CommonLib/RefCodeMap.h
+source/Lib/CommonLib/UnitTools.cpp
+source/Lib/EncoderLib/EncCu.cpp
+source/Lib/EncoderLib/EncCu.h
+source/Lib/EncoderLib/InterSearch.cpp
+source/Lib/EncoderLib/InterSearch.h

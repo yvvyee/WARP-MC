@@ -889,7 +889,8 @@ Distortion InterSearch::xGetInterPredictionError( PredictionUnit& pu, PelUnitBuf
 {
   PelUnitBuf predBuf = m_tmpStorageCtu.getBuf(UnitAreaRelative(*pu.cu, pu));
 
-  motionCompensation( pu, predBuf, eRefPicList );
+  { NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
+  motionCompensation( pu, predBuf, eRefPicList ); }
 
   DistParam cDistParam;
   cDistParam.applyWeight = false;
@@ -3369,7 +3370,8 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
             }
           }
           PelUnitBuf predBufTmp = m_tmpPredStorage[REF_PIC_LIST_1].getBuf( UnitAreaRelative(cu, pu) );
-          motionCompensation( pu, predBufTmp, REF_PIC_LIST_1 );
+          { NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
+          motionCompensation( pu, predBufTmp, REF_PIC_LIST_1 ); }
 
           motBits[0] = bits[0] - mbBits[0];
           motBits[1] = mbBits[1];
@@ -3473,7 +3475,8 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
               }
 #endif
               PelUnitBuf predBufTmp = m_tmpPredStorage[1 - refList].getBuf(UnitAreaRelative(cu, pu));
-              motionCompensation(pu, predBufTmp, RefPicList(1 - refList));
+              { NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
+              motionCompensation(pu, predBufTmp, RefPicList(1 - refList)); }
             }
 
             RefPicList eRefPicList = (refList ? REF_PIC_LIST_1 : REF_PIC_LIST_0);
@@ -3628,7 +3631,8 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
                   }
 #endif
                   PelUnitBuf predBufTmp = m_tmpPredStorage[refList].getBuf(UnitAreaRelative(cu, pu));
-                  motionCompensation(pu, predBufTmp, eRefPicList);
+                  { NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
+                  motionCompensation(pu, predBufTmp, eRefPicList); }
                 }
               }
             }   // for loop-refIdxTemp
@@ -4608,7 +4612,8 @@ void InterSearch::predInterSearch(CodingUnit& cu, Partitioner& partitioner)
         m_affineMotion.hevcCost[pu.cu->imv] = uiHevcCost;
       }
     }
-    motionCompensation( pu, predBuf, REF_PIC_LIST_X );
+    { NNPathScope nnScope(this, NN_PATH_AMVP_FINAL);   // yvvyee: final prediction of the AMVP mode (RD-compared, becomes reconstruction): full model
+    motionCompensation( pu, predBuf, REF_PIC_LIST_X ); }
     puIdx++;
   }
 
@@ -4914,6 +4919,7 @@ Distortion InterSearch::xGetTemplateCost(const PredictionUnit &pu, PelUnitBuf &o
 
   const Picture *picRef = pu.cu->slice->getRefPic(eRefPicList, refIdx);
   clipMv( cMvCand, pu.cu->lumaPos(), pu.cu->lumaSize(), *pu.cs->sps, *pu.cs->pps );
+  NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
 
   // prediction pattern
   const bool bi = pu.cu->slice->testWeightPred() && pu.cu->slice->getSliceType()==P_SLICE;
@@ -6200,6 +6206,7 @@ Distortion InterSearch::xGetSymmetricCost( PredictionUnit& pu, PelUnitBuf& origB
 {
   Distortion cost = std::numeric_limits<Distortion>::max();
   RefPicList eTarRefPicList = (RefPicList)(1 - (int)eCurRefPicList);
+  NNPathScope nnScope(this, NN_PATH_AMVP_SCREEN);   // yvvyee: screening (cost only), proxy allowed
 
   // get prediction of eCurRefPicList
   PelUnitBuf predBufA = m_tmpPredStorage[eCurRefPicList].getBuf( UnitAreaRelative( *pu.cu, pu ) );

@@ -299,7 +299,7 @@ __device__ void filtActG(short *act, int c0, int nc, int Cy, int Cx, int l, shor
 }
 
 __global__ void __launch_bounds__(NT, 1) kFront(const NNInterp::BlockIn *__restrict__ gin, NNInterp::BlockOut *__restrict__ gout, int n, unsigned *__restrict__ gpk,
-                                                const short *__restrict__ gW3, const int *__restrict__ lut, int outMask, int *err)
+                                                const short *__restrict__ gW3, const int *__restrict__ lut, int outMask, int *err, int linearOnly)
 {
   extern __shared__ __align__(16) unsigned char sm[];
   const int tid = threadIdx.x, tile = blockIdx.x; if (tile >= n) return;
@@ -551,6 +551,8 @@ __global__ void __launch_bounds__(NT, 1) kFront(const NNInterp::BlockIn *__restr
     out.ylin[t] = rshrW(acc, 15);   // yvvyee: always stored (read by kConv4L8)
   }
   PROF(9);
+  // yvvyee: proxy (linearOnly) stops after L6: y_lin is complete in gout.ylin, the L7 input is not needed (uniform exit)
+  if (linearOnly) return;
   // ---- L7 input (act0): ch0 = aligned window (shift fx, fy) rows/cols 2..2+C as Q14 of the normalized value, ch1..4 = lpn,
   // ch5..10 = cf{0,1,2,3,8,9} (all cropped to rows/cols 2..2+C), ch11 = 0; written packed and reflect-padded (6 channel pairs)
   short *CIN0 = (short *) (S + B_LST);
@@ -580,6 +582,15 @@ __global__ void __launch_bounds__(NT, 1) kFront(const NNInterp::BlockIn *__restr
 }
 
 __device__ __forceinline__ bool badTile(int tw, int th) { return tw < 4 || th < 4 || tw > 16 || th > 16 || (tw & 3) || (th & 3); }
+
+// yvvyee: proxy output (NNInterp::predict linearOnly): y = tile area of y_lin, y[yy*tw+xx] = ylin[(yy+2)*(tw+4) + xx+2]. ycomp: compact copy-back
+__global__ void kLinY(const NNInterp::BlockIn *__restrict__ gin, NNInterp::BlockOut *__restrict__ gout, int n, long long *__restrict__ ycomp)
+{
+  const int tile = blockIdx.x; if (tile >= n) return;
+  const int tw = gin[tile].tw, th = gin[tile].th; if (badTile(tw, th)) return;
+  NNInterp::BlockOut &out = gout[tile]; long long *yd = ycomp ? ycomp + (size_t) tile * 256 : (long long *) out.y;
+  for (int i = threadIdx.x; i < tw * th; i += blockDim.x) { const int yy = i / tw, xx = i - yy * tw; yd[i] = out.ylin[(yy + 2) * (tw + 4) + xx + 2]; }
+}
 
 // yvvyee: L7 layer l < 4: conv (outputs o0, o0+1, all Cy x Cx pixels) followed by FiltAct on those two channels, written as the packed
 // channel pair og of the next layer's input. grid = (Co / 2, tiles): the blocks of one tile are adjacent in launch order, so its
@@ -813,7 +824,7 @@ bool NNInterpCuda::load(const std::string &dir, int device)
   m_loaded = ok; return ok;
 }
 
-bool NNInterpCuda::predictBatch(const BlockIn *in, BlockOut *out, int n, int outMask)
+bool NNInterpCuda::predictBatch(const BlockIn *in, BlockOut *out, int n, int outMask, bool linearOnly)
 {
   if (!m_loaded || n <= 0) return n == 0;
   auto ck = [&](cudaError_t e) { if (e != cudaSuccess) { snprintf(m_err, sizeof m_err, "CUDA: %s", cudaGetErrorString(e)); return false; } return true; };
@@ -829,16 +840,23 @@ bool NNInterpCuda::predictBatch(const BlockIn *in, BlockOut *out, int n, int out
   if (!ck(cudaMemcpyAsync(m->dIn, in, (size_t) n * sizeof(BlockIn), cudaMemcpyHostToDevice, m->s))) return false;
   static const bool tim = getenv("NNI_CUDA_TIMING") != nullptr;   // yvvyee: per-kernel event timing (diagnostic)
   static cudaEvent_t ev[7]; static double acc[6]; static long cnt = 0; if (tim && !cnt) for (int i = 0; i < 7; i++) cudaEventCreate(&ev[i]);
+  const bool compact = (outMask & 7) == OUT_Y;   // yvvyee: y only: contiguous copy-back through a dense staging buffer
+  if (linearOnly)   // yvvyee: proxy: L1-L6 then the y_lin crop, no L7/L8 kernels
+  {
+    kFront<<<n, NT, ARENA, m->s>>>(m->dIn, m->dOut, n, m->dPk[0], m->dW3, m->dLut, outMask, m->dErr, 1);
+    kLinY<<<n, 128, 0, m->s>>>(m->dIn, m->dOut, n, compact ? m->dY : nullptr);
+  }
+  else {
   if (tim) cudaEventRecord(ev[0], m->s);
-  kFront<<<n, NT, ARENA, m->s>>>(m->dIn, m->dOut, n, m->dPk[0], m->dW3, m->dLut, outMask, m->dErr);
+  kFront<<<n, NT, ARENA, m->s>>>(m->dIn, m->dOut, n, m->dPk[0], m->dW3, m->dLut, outMask, m->dErr, 0);
   if (tim) cudaEventRecord(ev[1], m->s);
   kConvFA<6><<<dim3(16 / OPB, n), NTC, L_END, m->s>>>(0, m->dPk[0], m->dPk[1], m->dIn, m->dW3, n);
   if (tim) cudaEventRecord(ev[2], m->s);
   for (int l = 1; l < 4; l++) { kConvFA<8><<<dim3(16 / OPB, n), NTC, L_END, m->s>>>(l, m->dPk[l & 1], m->dPk[(l + 1) & 1], m->dIn, m->dW3, n); if (tim) cudaEventRecord(ev[2 + l], m->s); }
-  const bool compact = (outMask & 7) == OUT_Y;   // yvvyee: y only: contiguous copy-back through a dense staging buffer
   kConv4L8<<<n, NTC, L8_END, m->s>>>(m->dPk[0], m->dIn, m->dOut, m->dW3, m->dLut, n, compact ? m->dY : nullptr);
   if (tim) { cudaEventRecord(ev[6], m->s); cudaEventSynchronize(ev[6]); for (int i = 0; i < 6; i++) { float ms; cudaEventElapsedTime(&ms, ev[i], ev[i + 1]); acc[i] += ms; } cnt++;
     if (cnt % 200 == 0) fprintf(stderr, "NNI_CUDA_TIMING n=%d us/batch: front %.1f conv0FA %.1f conv1FA %.1f conv2FA %.1f conv3FA %.1f conv4L8 %.1f\n", n, 1e3 * acc[0] / cnt, 1e3 * acc[1] / cnt, 1e3 * acc[2] / cnt, 1e3 * acc[3] / cnt, 1e3 * acc[4] / cnt, 1e3 * acc[5] / cnt); }
+  }
   if (!ck(cudaGetLastError())) return false;
   // yvvyee: copy back only the requested fields (y, ylin, xd are consecutive in BlockOut)
   const size_t offY = offsetof(BlockOut, y), offL = offsetof(BlockOut, ylin), offX = offsetof(BlockOut, xd);

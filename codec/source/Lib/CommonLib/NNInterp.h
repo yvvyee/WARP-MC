@@ -40,6 +40,9 @@ public:
     int64_t xd[1024];        // yvvyee: L4b 뒤 창 (th+16)x(tw+16) (행 간격 tw+16), Q10.4 (시험용)
   };
   void predict(const BlockIn &in, BlockOut &out) const;      // yvvyee: 가속 구현. predictRef 와 모든 출력 비트가 같다 (적재 시 증명 조건을 못 맞추면 predictRef 로 넘김)
+  // yvvyee: linearOnly = proxy evaluation for encoder screening (VTM_NNINTERP_PROXY). Runs L1-L6 only, skips L7/L8, and returns
+  //         out.y = the tile area of y_lin, bit-exact to the y_lin the full path computes (out.y of the full path = y_lin + L8 correction).
+  void predict(const BlockIn &in, BlockOut &out, bool linearOnly) const;
   void predictRef(const BlockIn &in, BlockOut &out) const;   // yvvyee: 가속 전 기준 구현 (비트 일치 검증용, 2026-10-21 이전 predict 그대로)
   struct Arr { std::vector<int64_t> v; std::vector<int64_t> shape; };
   const Arr &A_(const std::string &n) const { return A(n); }

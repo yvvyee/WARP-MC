@@ -140,6 +140,24 @@ public:
 
 class InterPrediction : public WeightPrediction
 {
+public:
+  // yvvyee: call-path tags for the luma model (profiling and proxy selection). The ME hook (dbgTag 0) is NN_PATH_ME.
+  //         Screening paths (ranking only) may use the linear-only proxy when VTM_NNINTERP_PROXY=1. All other paths use the full model.
+  static bool nnEnabled();                                 // yvvyee: 모형 활성 (환경변수 VTM_NNINTERP_DIR), moved to public for the proxy scopes
+  enum NNPath { NN_PATH_ME = 0, NN_PATH_AMVP_SCREEN, NN_PATH_AMVP_FINAL, NN_PATH_MRG_PRUNE_REG, NN_PATH_MRG_PRUNE_MMVD, NN_PATH_MRG_PRUNE_SUB,
+                NN_PATH_MRG_PRUNE_GPM, NN_PATH_MRG_UPGRADE, NN_PATH_MRG_FINAL, NN_PATH_OTHER, NN_PATH_NUM };
+  static bool nnPathIsScreening(int p) { return p == NN_PATH_ME || p == NN_PATH_AMVP_SCREEN || p == NN_PATH_MRG_PRUNE_REG || p == NN_PATH_MRG_PRUNE_MMVD
+                                                || p == NN_PATH_MRG_PRUNE_SUB || p == NN_PATH_MRG_PRUNE_GPM; }
+  static bool nnProxyEnv();                                // yvvyee: VTM_NNINTERP_PROXY=1
+  static bool nnProxyActive() { return nnProxyEnv() && nnEnabled(); }
+  // yvvyee: RAII scope that sets the current call path and restores the previous one
+  struct NNPathScope
+  {
+    InterPrediction *p; int old;
+    NNPathScope(InterPrediction *ip, int path) : p(ip), old(ip->m_nnPath) { p->m_nnPath = path; }
+    ~NNPathScope() { p->m_nnPath = old; }
+  };
+  int                  m_nnPath = NN_PATH_OTHER;           // yvvyee: current call path (default: full model)
 private:
 
 
@@ -148,7 +166,6 @@ protected:
   InterpolationFilter  m_if;
   int                  m_nnParentW = 0, m_nnParentH = 0;   // yvvyee: DMVR 하위 PU 예측 중 부모 PU 크기 (0 = 해당 없음)
   bool                 m_nnSubPuMode = false;              // yvvyee: SbTMVP 하위 PU 예측 중 (타일 8x8)
-  static bool          nnEnabled();                        // yvvyee: 모형 활성 (환경변수 VTM_NNINTERP_DIR)
   void                 nnPredictLuma(const Position &pos, int width, int height, const Picture *refPic, const Mv &mv, int st, int parW, int parH, int qp, int imv,
                                      int merge, int dpoc, int curPoc, Pel *dst, ptrdiff_t dstStride, bool rndRes, const ClpRng &clpRng, int dbgTag = 1, int tileSz = 16) const;   // yvvyee: PU 타일 루프 (dbgTag 0 = ME 후보, 시험 기록 제외)
 

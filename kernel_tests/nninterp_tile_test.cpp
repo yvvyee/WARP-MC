@@ -18,6 +18,7 @@ int main(int argc, char **argv)
   struct G { long rows = 0, okY = 0, okL = 0, okX = 0, fin = 0, okF = 0; long long mdY = 0, mdL = 0, mdX = 0, mdF = 0; double sec = 0; };
   std::map<std::pair<int, int>, G> grp; std::map<int, std::vector<int64_t>> y0s;   // 양방향: 가설 0 출력 보관
   NNInterp::BlockIn in; NNInterp::BlockOut o;
+  const bool lin = getenv("NNI_LINEAR") != nullptr;   // yvvyee: proxy mode: expected y = tile area of the reference y_lin
   while (fread(row.data(), 4, ROW, rf) == (size_t) ROW)
   {
     const int r = row[0], hyp = row[1], tw = row[2], th = row[3];
@@ -28,18 +29,18 @@ int main(int argc, char **argv)
     for (int i = 0; i < 1024; i++) { in.win[i] = rec[32 + hyp * 1024 + i]; in.map[i] = rec[2080 + hyp * 1024 + i]; }
     in.fx = std::max<int>(0, H[11 + 2 * hyp]); in.fy = std::max<int>(0, H[12 + 2 * hyp]); in.qp = H[1]; in.imv = H[17]; in.merge = H[18]; in.dpoc = H[19 + hyp];
     in.w4 = H[5] >> 2; in.h4 = H[6] >> 2; in.st = H[0];
-    const auto t0 = std::chrono::steady_clock::now(); nn.predict(in, o); const auto t1 = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now(); nn.predict(in, o, lin); const auto t1 = std::chrono::steady_clock::now();
     G &g = grp[{ tw, th }]; g.rows++; g.sec += std::chrono::duration<double>(t1 - t0).count();
     const int nY = th * tw, nL = (th + 4) * (tw + 4), nX = (th + 16) * (tw + 16);
     long long dY = 0, dL = 0, dX = 0;
-    for (int i = 0; i < nY; i++) dY = std::max(dY, std::llabs(o.y[i] - row[4 + i]));
+    for (int i = 0; i < nY; i++) dY = std::max(dY, std::llabs(o.y[i] - (lin ? row[260 + (i / tw + 2) * (tw + 4) + i % tw + 2] : row[4 + i])));
     for (int i = 0; i < nL; i++) dL = std::max(dL, std::llabs(o.ylin[i] - row[260 + i]));
     for (int i = 0; i < nX; i++) dX = std::max(dX, std::llabs(o.xd[i] - row[660 + i]));
     if (dX != 0 && getenv("NNI_VERBOSE"))   // yvvyee: xd 불일치 위치 출력
       for (int i = 0; i < nX; i++) if (o.xd[i] != row[660 + i]) printf("xd mismatch rec %d hyp %d tile %dx%d at (y %d, x %d): cpp %lld ref %d\n", r, hyp, tw, th, i / (tw + 16), i % (tw + 16), (long long) o.xd[i], row[660 + i]);
     g.okY += (dY == 0); g.okL += (dL == 0); g.okX += (dX == 0); g.mdY = std::max(g.mdY, dY); g.mdL = std::max(g.mdL, dL); g.mdX = std::max(g.mdX, dX);
     // 최종 출력: 단방향 = 가설 0, 양방향 = Q10.4 평균 floor((y0+y1)/2 + 0.5)
-    if (H[0] == 0 || hyp == 1)
+    if (!lin && (H[0] == 0 || hyp == 1))   // yvvyee: final (bi average of y) is checked in full mode only
     {
       long long dF = 0;
       for (int i = 0; i < nY; i++) { const int64_t f = (H[0] == 0) ? o.y[i] : ((y0s[r][i] + o.y[i] + 1) >> 1); dF = std::max(dF, std::llabs(f - row[1684 + i])); }
@@ -56,6 +57,7 @@ int main(int argc, char **argv)
     printf("%2dx%-3d %7ld | %-22s %-22s %-22s | %-22s | %9.3f %12.3f\n", tw, th, g.rows, b[0], b[1], b[2], b[3], 1e3 * g.sec / g.rows, 1e6 * g.sec / g.rows / (tw * th));
     T += g.rows; TY += g.okY; TL += g.okL; TX += g.okX; TF += g.okF; TFn += g.fin;
   }
+  if (lin) printf("[linearOnly] y compared with the y_lin tile crop, final not applicable\n");
   printf("total rows %ld | y exact %ld | y_lin exact %ld | xd exact %ld | final exact %ld/%ld | pending bi %zu\n", T, TY, TL, TX, TF, TFn, y0s.size());
   fclose(df); fclose(rf); return 0;
 }

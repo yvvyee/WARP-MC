@@ -24,7 +24,8 @@ public:
   bool load(const std::string &dir, int device = 0);   // manifest.txt + .bin; false if missing arrays or a bit-exactness precondition fails
   bool enabled() const { return m_loaded; }
   // yvvyee: evaluates n tiles (one H2D copy, one kernel, one D2H copy, then stream sync). false on CUDA error or invalid tile geometry.
-  bool predictBatch(const BlockIn *in, BlockOut *out, int n, int outMask = OUT_ALL);
+  bool predictBatch(const BlockIn *in, BlockOut *out, int n, int outMask = OUT_ALL, bool linearOnly = false);
+  // yvvyee: linearOnly = proxy evaluation (NNInterp::predict(in, out, true)): L1-L6 only, out.y = tile area of y_lin (bit-exact), ylin/xd as in the full path
   size_t deviceBytes() const;      // device memory allocated by this object (parameters + batch buffers)
   const char *lastError() const { return m_err; }
 

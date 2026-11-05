@@ -9,7 +9,8 @@ int main(int argc, char **argv)
   NNInterp &nn = NNInterp::get(); if (!nn.load(argv[1])) return 1;
   const int N = atoi(argv[2]); std::mt19937_64 rng(atoi(argv[3]));
   auto U = [&](int a, int b) { return (int) (a + rng() % (uint64_t) (b - a + 1)); };
-  NNInterp::BlockIn in; static NNInterp::BlockOut o1, o2; long bad = 0;
+  NNInterp::BlockIn in; static NNInterp::BlockOut o1, o2; long bad = 0; const bool lin = getenv("NNI_LINEAR") != nullptr;   // yvvyee: proxy mode: predict(linearOnly) y must equal the y_lin tile area of predictRef
+
   for (int it = 0; it < N; it++)
   {
     in.tw = 4 * U(1, 4); in.th = 4 * U(1, 4); const int Ww = in.tw + 16, Hh = in.th + 16; in.stride = U(Ww, 1024 / Hh > 32 ? 32 : Ww);
@@ -34,10 +35,11 @@ int main(int argc, char **argv)
     }
     in.fx = U(-1, 15); in.fy = U(-1, 15); if (U(0, 3) == 0) { in.fx = 8 * U(0, 1); in.fy = 8 * U(0, 1); }
     in.qp = U(0, 63); in.imv = U(0, 3); if (U(0, 2) == 0) in.imv = 3; in.merge = U(0, 1); in.dpoc = U(-32, 32); in.w4 = U(1, 32); in.h4 = U(1, 32); in.st = U(0, 2);
-    nn.predict(in, o1); nn.predictRef(in, o2);
+    nn.predict(in, o1, lin); nn.predictRef(in, o2);
+    if (lin) for (int yy = 0; yy < in.th; yy++) for (int xx = 0; xx < in.tw; xx++) o2.y[yy * in.tw + xx] = o2.ylin[(yy + 2) * (in.tw + 4) + xx + 2];
     const int nY = in.tw * in.th, nL = (in.tw + 4) * (in.th + 4), nX = Ww * Hh;
     const bool ok = !memcmp(o1.y, o2.y, 8 * nY) && !memcmp(o1.ylin, o2.ylin, 8 * nL) && !memcmp(o1.xd, o2.xd, 8 * nX);
     if (!ok) { bad++; if (bad < 5) fprintf(stderr, "mismatch it %d mode %d tile %dx%d fx %d fy %d imv %d\n", it, mode, in.tw, in.th, in.fx, in.fy, in.imv); }
   }
-  printf("fuzz %d cases, mismatches %ld\n", N, bad); return bad != 0;
+  printf("%sfuzz %d cases", lin ? "[linearOnly] " : "", N); printf(", mismatches %ld\n", bad); return bad != 0;
 }

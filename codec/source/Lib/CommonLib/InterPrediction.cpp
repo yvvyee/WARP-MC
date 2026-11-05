@@ -694,6 +694,14 @@ bool InterPrediction::nnEnabled()
   return NNInterp::get().enabled();
 }
 
+// yvvyee: proxy switch (VTM_NNINTERP_PROXY=1). Encoder screening paths evaluate L1-L6 only (y_lin); see nnPathIsScreening.
+bool InterPrediction::nnProxyEnv()
+{
+  static int s_proxy = -1;
+  if (s_proxy < 0) { const char *e = getenv("VTM_NNINTERP_PROXY"); s_proxy = (e && atoi(e) != 0) ? 1 : 0; }
+  return s_proxy == 1;
+}
+
 // yvvyee: QKV-MC 휘도 가설별 보간 — PU 타일 루프 (stage4_integration.md 11절). 복호기 훅(xPredInterBlk)과 부호화기 분수 ME(InterSearch::xPatternRefinement) 가 공용.
 //   pos/width/height: 예측 블록(화면 좌표), mv: 원 MV(1/16, 클리핑 전), st: 층, parW/parH: 부모 PU 크기, dst: 출력(rndRes 면 화소, 아니면 14비트 내부 정밀도).
 //   타일 = 블록 원점 정렬 16x16(가장자리는 남은 크기), 창 (th+16)x(tw+16) 은 참조 그림 전체 복원 버퍼에서 절대 좌표(화면 밖은 가장자리 복제)로 읽는다.
@@ -704,9 +712,16 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
   // yvvyee: 진단용 시간 집계 (VTM_NNINTERP_PROF=1, stderr 로 종료 시 출력). dbgTag 0 = 부호화기 분수 ME, 1 = 최종 MC. 출력 비트에는 영향 없음.
   struct NNProf { bool on = getenv("VTM_NNINTERP_PROF") != nullptr; double ns[2] = {0, 0}; long long calls[2] = {0, 0}, tiles[2] = {0, 0};
     std::unordered_set<uint64_t> uniq[2], uniqAll; long long cacheHits = 0, cacheMiss = 0;   // yvvyee: 타일 키 고유 개수와 캐시 적중 (진단)
+    // yvvyee: per call path counters (NN_PATH_*): calls, tiles, kernel-evaluated tiles (cache misses), proxy tiles, wall time
+    double pns[NN_PATH_NUM] = {}; long long pcalls[NN_PATH_NUM] = {}, ptiles[NN_PATH_NUM] = {}, pmiss[NN_PATH_NUM] = {}, pproxy[NN_PATH_NUM] = {};
     ~NNProf() { if (on) for (int t = 0; t < 2; t++) fprintf(stderr, "NNPROF tag=%d calls=%lld tiles=%lld uniqTiles=%zu sec=%.3f\n", t, calls[t], tiles[t], uniq[t].size(), ns[t] * 1e-9);
-                if (on) fprintf(stderr, "NNPROF uniqTiles(ME|MC union)=%zu cacheHits=%lld cacheMiss=%lld\n", uniqAll.size(), cacheHits, cacheMiss); } };
+                if (on) fprintf(stderr, "NNPROF uniqTiles(ME|MC union)=%zu cacheHits=%lld cacheMiss=%lld\n", uniqAll.size(), cacheHits, cacheMiss);
+                static const char *nm[NN_PATH_NUM] = { "ME", "AMVP_SCREEN", "AMVP_FINAL", "MRG_PRUNE_REG", "MRG_PRUNE_MMVD", "MRG_PRUNE_SUB", "MRG_PRUNE_GPM", "MRG_UPGRADE", "MRG_FINAL", "OTHER" };
+                if (on) for (int t = 0; t < NN_PATH_NUM; t++) fprintf(stderr, "NNPROF path=%d name=%s calls=%lld tiles=%lld kernelTiles=%lld proxyTiles=%lld sec=%.3f\n", t, nm[t], pcalls[t], ptiles[t], pmiss[t], pproxy[t], pns[t] * 1e-9); } };
   static NNProf s_prof;
+  // yvvyee: call path and proxy decision. dbgTag 0 is the ME hook. Proxy only on screening paths and only with VTM_NNINTERP_PROXY=1.
+  const int nnPath = dbgTag == 0 ? (int) NN_PATH_ME : m_nnPath;
+  const bool proxy = nnProxyEnv() && nnPathIsScreening(nnPath);
   const auto profT0 = s_prof.on ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
   const int shiftIn = IF_INTERNAL_FRAC_BITS(clpRng.bd) - 4;   // Q10.4 -> 내부 정밀도 (10비트: 0)
   NNInterp::BlockIn in{}; NNInterp::BlockOut out{};           // 영 초기화 (미사용 영역의 비결정성 방지)
@@ -721,7 +736,8 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
   // yvvyee: ME·MC 공용 타일 캐시 (stage4 13.8절). 키 = (참조 POC, 창 절대 위치, 타일 크기, 위상, 층, merge, QP, AMVR, POC 거리, 블록 크기) 전체 비교.
   //   같은 키의 커널 출력(Q10.4) 은 참조 복원과 지도가 고정이므로 동일하다. 적중 시 커널을 건너뛰며 출력 비트는 동일하다.
   //   VTM_NNINTERP_CACHE=N (항목 상한, 기본 262144, 0 이면 끔). 상한 초과 시 전체 비움(결정적). VTM_NNINTERP_DBG 사용 시 끔(덤프는 전 타일 기록).
-  struct NNKey { int32_t v[14]; bool operator==(const NNKey &o) const { return memcmp(v, o.v, sizeof(v)) == 0; } };
+  struct NNKey { int32_t v[15];   // yvvyee: v[14] = proxy flag, so proxy (y_lin) and full (y) results never share an entry
+  bool operator==(const NNKey &o) const { return memcmp(v, o.v, sizeof(v)) == 0; } };
   struct NNKeyHash { size_t operator()(const NNKey &k) const { uint64_t h = 1469598103934665603ull; for (int32_t x : k.v) { h ^= (uint64_t) (uint32_t) x + 0x9e3779b97f4a7c15ull; h *= 1099511628211ull; } return (size_t) h; } };
   struct NNCache { int cap = -1; std::unordered_map<NNKey, std::array<int64_t, 256>, NNKeyHash> m; long long hits = 0, miss = 0; };
   static NNCache s_cache;
@@ -736,7 +752,7 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
     const int tw = std::min(tileSz, width - bx), th = std::min(tileSz, height - by);
     const int ox = posInt.x + bx - 8, oy = posInt.y + by - 8;
     NNKey &k = keys[ti];
-    const int32_t kv[14] = { refPoc, ox, oy, tw, th, in.fx, in.fy, in.st, in.merge, in.qp, in.imv, in.dpoc, in.w4, in.h4 };
+    const int32_t kv[15] = { refPoc, ox, oy, tw, th, in.fx, in.fy, in.st, in.merge, in.qp, in.imv, in.dpoc, in.w4, in.h4, proxy ? 1 : 0 };
     memcpy(k.v, kv, sizeof(kv));
     if (s_prof.on) { uint64_t h = NNKeyHash()(k); const int t = dbgTag ? 1 : 0; s_prof.uniq[t].insert(h); s_prof.uniqAll.insert(h); }
     if (s_cache.cap > 0)
@@ -766,7 +782,9 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
     }
     std::vector<int> miss; miss.reserve(ntiles); for (int ti = 0; ti < ntiles; ti++) if (!hit[ti]) miss.push_back(ti);
     const int nmiss = (int) miss.size();
-    if (s_gpu && nmiss > 0)
+    // yvvyee: proxy calls (y_lin only) use the GPU linearOnly mode. VTM_NNINTERP_PROXY_CHECK (diagnostic) keeps the CPU path, which runs the check.
+    static int s_gpchk = -1; if (s_gpchk < 0) { const char *e = getenv("VTM_NNINTERP_PROXY_CHECK"); s_gpchk = (e && atoi(e)) ? 1 : 0; }
+    if (s_gpu && nmiss > 0 && !(proxy && s_gpchk))
     {
       if (nmiss > s_gcap)
       {
@@ -792,7 +810,7 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
             gi.map[y * ww + x] = refPic->codeMap.at(cx, cy);
           }
       }
-      if (s_gpu->predictBatch(s_gin, s_gout.data(), nmiss, NNInterpCuda::OUT_Y))
+      if (s_gpu->predictBatch(s_gin, s_gout.data(), nmiss, NNInterpCuda::OUT_Y, proxy))
       {
         for (int j = 0; j < nmiss; j++) memcpy(outs[miss[j]].data(), s_gout[j].y, sizeof(int64_t) * 256);
         gpuDone = true;
@@ -817,7 +835,29 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
           in.win[y * ww + x] = fullRef.at(cx, cy);
           in.map[y * ww + x] = refPic->codeMap.at(cx, cy);
         }
-      nn.predict(in, out);
+      nn.predict(in, out, proxy);
+      // yvvyee: VTM_NNINTERP_PROXY_CHECK=1 (diagnostic): the proxy output must equal the y_lin of the full path, bit for bit
+      static int s_pchk = -1; if (s_pchk < 0) { const char *e = getenv("VTM_NNINTERP_PROXY_CHECK"); s_pchk = (e && atoi(e)) ? 1 : 0; }
+      if (proxy && s_pchk)
+      {
+        NNInterp::BlockOut ref{}; nn.predict(in, ref, false);
+        for (int y = 0; y < th; y++) for (int x = 0; x < tw; x++)
+          if (out.y[y * tw + x] != ref.ylin[(y + 2) * (tw + 4) + x + 2]) { fprintf(stderr, "NNInterp proxy mismatch at tile (%d,%d) pixel (%d,%d)\n", bx, by, x, y); exit(1); }
+        // yvvyee: diagnostic statistics of the L8 correction that the proxy omits (y - y_lin, Q10.4), and of the rounded pixel difference
+        struct PxStat { long long tiles = 0, px = 0, nzQ = 0, nzPel = 0; double sumAbsQ = 0; long long maxAbsQ = 0;
+          ~PxStat() { if (tiles) fprintf(stderr, "NNPROXYCHK tiles=%lld px=%lld corrNonzeroQ4=%lld corrNonzeroPel=%lld meanAbsCorrPel=%.5f maxAbsCorrPel=%.4f\n",
+                                          tiles, px, nzQ, nzPel, sumAbsQ / 16.0 / (double) px, maxAbsQ / 16.0); } };
+        static PxStat s_px;
+#pragma omp critical(nnproxychk)
+        {
+          s_px.tiles++;
+          for (int y = 0; y < th; y++) for (int x = 0; x < tw; x++)
+          {
+            const int64_t a = ref.y[y * tw + x], b = out.y[y * tw + x], d = a > b ? a - b : b - a;
+            s_px.px++; s_px.nzQ += d != 0; s_px.nzPel += ((a + 8) >> 4) != ((b + 8) >> 4); s_px.sumAbsQ += (double) d; s_px.maxAbsQ = std::max<long long>(s_px.maxAbsQ, d);
+          }
+        }
+      }
       memcpy(outs[ti].data(), out.y, sizeof(int64_t) * 256);
       // 시험용 기록 (VTM_NNINTERP_DBG=파일): 타일 위치·부가 정보·예측(Q10.4)·창·지도 를 int32 로 적는다 (레코드 = 16 + 256 + 2048).
       static FILE *s_dbg = nullptr; static bool s_dbgTried = false;
@@ -854,6 +894,9 @@ void InterPrediction::nnPredictLuma(const Position &pos, int width, int height, 
         dst[(by + y) * dstStride + bx + x] = v;
       }
   }
+  if (s_prof.on) { const double dns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - profT0).count();
+                   int nmissP = 0; for (int ti = 0; ti < ntiles; ti++) nmissP += !hit[ti];
+                   s_prof.pns[nnPath] += dns; s_prof.pcalls[nnPath]++; s_prof.ptiles[nnPath] += ntiles; s_prof.pmiss[nnPath] += nmissP; if (proxy) s_prof.pproxy[nnPath] += nmissP; }
   if (s_prof.on) { const int t = dbgTag ? 1 : 0; s_prof.ns[t] += std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - profT0).count(); s_prof.calls[t]++; s_prof.tiles[t] += ntiles;
                    s_prof.cacheHits = s_cache.hits; s_prof.cacheMiss = s_cache.miss; }
 }

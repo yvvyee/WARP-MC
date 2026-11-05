@@ -1282,9 +1282,17 @@ void NNInterp::buildFast()
   if (getenv("NNI_VERBOSE")) fprintf(stderr, "NNInterp: fast=%d fc=%d simd=%d\n", m_fast ? 1 : 0, f.fc, f.simd);   // yvvyee: 시험용 (가속 경로 사용 여부 확인)
 }
 
-void NNInterp::predict(const BlockIn &in, BlockOut &out) const
+void NNInterp::predict(const BlockIn &in, BlockOut &out) const { predict(in, out, false); }
+
+void NNInterp::predict(const BlockIn &in, BlockOut &out, bool linearOnly) const
 {
-  if (!m_fast) { predictRef(in, out); return; }
+  if (!m_fast)
+  {
+    predictRef(in, out);
+    if (linearOnly)   // yvvyee: reference path computes ylin as well; return its tile area as y
+      for (int yy = 0; yy < in.th; yy++) for (int xx = 0; xx < in.tw; xx++) out.y[yy * in.tw + xx] = out.ylin[(yy + 2) * (in.tw + 4) + xx + 2];
+    return;
+  }
   const Fast &F = *m_fast; Work &w = work();
   const int nb = 4, K = F.K;
   const int st = in.st, qp = in.qp, fx = std::max(0, in.fx), fy = std::max(0, in.fy);
@@ -1399,6 +1407,12 @@ void NNInterp::predict(const BlockIn &in, BlockOut &out) const
     w.ylin[t] = rshr(acc, 15);
   }
   for (int i = 0; i < NL; i++) out.ylin[i] = w.ylin[i];
+  if (linearOnly)
+  {
+    // yvvyee: proxy (encoder screening only). Same indexing as the L8 output line: y = ylin[(y+2)*Lx + x+2] without the rate-gated correction.
+    for (int yy = 0; yy < th; yy++) for (int xx = 0; xx < tw; xx++) out.y[yy * tw + xx] = w.ylin[(yy + 2) * Lx + xx + 2];
+    return;
+  }
   // ---- L7
   const int eIn = F.eIn;
   { const int64_t *Xh = w.Xh[hA0];
