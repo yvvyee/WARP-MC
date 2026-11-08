@@ -15,7 +15,8 @@ EXPORT=/home/yvvyee/SSD1/dev/c4/export_tile_c16
 export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps_yvvyee CUDA_MPS_LOG_DIRECTORY=/tmp/mps_yvvyee_log VTM_NNINTERP_PROXY=1
 SEQS="D:BasketballPass_416x240_50:BasketballPass:50 D:BQSquare_416x240_60:BQSquare:60 D:BlowingBubbles_416x240_50:BlowingBubbles:50 D:RaceHorses_416x240_30:RaceHorses:30
 C:BasketballDrill_832x480_50:BasketballDrill:50 C:BQMall_832x480_60:BQMall:60 C:PartyScene_832x480_50:PartyScene:50 C:RaceHorses_832x480_30:RaceHorsesC:30
-E:FourPeople_1280x720_60:FourPeople:60 E:Johnny_1280x720_60:Johnny:60 E:KristenAndSara_1280x720_60:KristenAndSara:60"
+E:FourPeople_1280x720_60:FourPeople:60 E:Johnny_1280x720_60:Johnny:60 E:KristenAndSara_1280x720_60:KristenAndSara:60
+B:Cactus_1920x1080_50:Cactus:50 B:BasketballDrive_1920x1080_50:BasketballDrive:50 B:BQTerrace_1920x1080_60:BQTerrace:60 B:MarketPlace_1920x1080_60fps_10bit_420:MarketPlace:60 B:RitualDance_1920x1080_60fps_10bit_420:RitualDance:60"
 mkdir -p $ROOT/jobs; JOBS=$ROOT/jobs/jobs_${TAG}_$(echo $CLASSES | tr ' ' '_').txt; : > $JOBS
 for s in $SEQS; do
   IFS=: read cls yuv pcfg fps <<< "$s"
