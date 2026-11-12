@@ -8,6 +8,8 @@ set -u
 [ -e /home/yvvyee/SSD1/dev/c2s/HOLD ] && { echo "HOLD present, exit"; exit 0; }
 CLASSES=${1:-"D"}; NG=${2:-32}; PG=${3:-32}; PC=${4:-8}; QPS=${5:-"22 27 32 37 42"}; DRY=${6:-}
 MODE=model_proxy; TAG=modelgpuproxy; THR=1
+ONLY=${ONLY:-}  # yvvyee: 11-13 ONLY=G 는 GPU 작업만, ONLY=C 는 CPU 작업만 실행(작업 배정은 같음). 표지는 [CLASSES G] / [CLASSES C].
+LBL="$CLASSES${ONLY:+ $ONLY}"
 ROOT=/home/yvvyee/SSD1/dev/c2s; YUV=/home/yvvyee/SSD1/dev/ctc2s; CFG=/home/yvvyee/SSD1/dev/VTM-23.8/cfg
 ENC_G=/home/yvvyee/SSD1/dev/VTM-23.8_nn_gpu_proxy/bin/EncoderAppStatic; DEC_G=/home/yvvyee/SSD1/dev/VTM-23.8_nn_gpu_proxy/bin/DecoderAppStatic
 ENC_C=/home/yvvyee/SSD1/dev/VTM-23.8_nn_gpu_proxy/bin/EncoderAppStatic; DEC_C=/home/yvvyee/SSD1/dev/VTM-23.8_nn_gpu_proxy/bin/DecoderAppStatic
@@ -49,8 +51,8 @@ one() {
 }
 export -f one; export MODE TAG THR ROOT YUV CFG ENC_G DEC_G ENC_C DEC_C EXPORT CUDA_MPS_PIPE_DIRECTORY CUDA_MPS_LOG_DIRECTORY
 if [ "$DRY" = "--dry" ]; then echo "GPU jobs: $(grep -c '^G' $SORTED) (dev0 $(grep -c '^G 0' $SORTED), dev1 $(grep -c '^G 1' $SORTED)), CPU jobs: $(grep -c '^C' $SORTED)"; head -3 $SORTED; tail -9 $SORTED | head -2; exit 0; fi
-echo "C2S $TAG [$CLASSES] START $(date '+%m-%d_%H:%M') jobs $(wc -l < $JOBS) gpu $(grep -c '^G' $SORTED)/P$PG cpu $(grep -c '^C' $SORTED)/P$PC" >> $ROOT/progress.txt
-grep '^G' $SORTED | xargs -P $PG -L 1 bash -c 'one "$@"' _ >> $ROOT/progress.txt 2>&1 &
-grep '^C' $SORTED | xargs -P $PC -L 1 bash -c 'one "$@"' _ >> $ROOT/progress.txt 2>&1 &
+echo "C2S $TAG [$LBL] START $(date '+%m-%d_%H:%M') jobs $(wc -l < $JOBS) gpu $(grep -c '^G' $SORTED)/P$PG cpu $(grep -c '^C' $SORTED)/P$PC" >> $ROOT/progress.txt
+[ "$ONLY" = C ] || grep '^G' $SORTED | xargs -P $PG -L 1 bash -c 'one "$@"' _ >> $ROOT/progress.txt 2>&1 &
+[ "$ONLY" = G ] || grep '^C' $SORTED | xargs -P $PC -L 1 bash -c 'one "$@"' _ >> $ROOT/progress.txt 2>&1 &
 wait
-echo "C2S $TAG [$CLASSES] DONE $(date '+%m-%d_%H:%M')" >> $ROOT/progress.txt
+echo "C2S $TAG [$LBL] DONE $(date '+%m-%d_%H:%M')" >> $ROOT/progress.txt
