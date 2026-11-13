@@ -1,12 +1,12 @@
 """yvvyee: 2초·5-QP 결과(collect_c2s.sh 출력)에서 원고 표(EN/KO)와 CSV 를 만든다.
-사용: python mk_results_tex.py results.txt [--dect dect.csv] [--enct enct.csv] [--out tables/classD_2s.tex --ko ko/tables/classD_2s.tex --csv results_classD_2s.csv]
+사용: python mk_results_tex.py results.txt [--dect dect.csv] [--enct enct.csv] [--noenct] [--cls D] [--out tables/classD_2s.tex --ko ko/tables/classD_2s.tex --csv results_classD_2s.csv]
 dect/enct csv: cfg,qp,name,anchor_s,model_s  (EncT·DecT 는 다섯 QP 합의 비, 클래스 행은 시퀀스별 비의 평균)
 """
 import sys, argparse, collections, numpy as np
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from bdrate import bd_rate
 ap = argparse.ArgumentParser(); ap.add_argument('txt'); ap.add_argument('--dect'); ap.add_argument('--enct')
-ap.add_argument('--out'); ap.add_argument('--ko'); ap.add_argument('--csv'); ap.add_argument('--cls', default='D')
+ap.add_argument('--out'); ap.add_argument('--ko'); ap.add_argument('--csv'); ap.add_argument('--cls', default='D'); ap.add_argument('--noenct', action='store_true')  # yvvyee: EncT 미수집 클래스는 EncT 열을 뺀다
 a = ap.parse_args()
 D = collections.defaultdict(dict)
 for ln in open(a.txt):
@@ -24,7 +24,7 @@ def ratios(path):
     return {k: v[1] / v[0] for k, v in R.items()}
 DT, ET = ratios(a.dect), ratios(a.enct)
 sets = {'All': (22, 27, 32, 37, 42), 'Low': (22, 27, 32, 37), 'High': (27, 32, 37, 42)}
-seqs = sorted({s for (c, s) in D if s.startswith(a.cls + '_')}, key=lambda s: ['BQSquare','BasketballPass','BlowingBubbles','RaceHorses'].index(s.split('_')[1]) if s.split('_')[1] in ['BQSquare','BasketballPass','BlowingBubbles','RaceHorses'] else 99)
+seqs = sorted(s for s in {s for (c, s) in D} if s.startswith(a.cls + '_'))
 rows = {}  # (cfg, seq) -> dict
 for c in ('RA', 'LDB'):
     for s in seqs:
@@ -38,26 +38,31 @@ for c in ('RA', 'LDB'):
         r['dect'] = DT.get((c, s), float('nan')) if DT else float('nan')
         rows[(c, s)] = r
 cols = [('y','All'),('y','Low'),('y','High'),('u','All'),('v','All')]
-def fmt(x): return ('$-$%.2f' % -x) if x < 0 else ('%.2f' % x)
+def fmt(x): x = round(x, 2) + 0.0; return ('$-$%.2f' % -x) if x < 0 else ('%.2f' % x)
 def fmtr(x): return '--' if x != x else ('%.0f' % x)
 def mean(c, key): v = [rows[(c, s)][key] for s in seqs if (c, s) in rows]; return float(np.mean(v)) if v else float('nan')
 def table(lang):
-    cap_en = r'BD-rate (\%) of WARP-MC against the VTM-23.8 anchor on the first 2 seconds of the class D sequences at QP 22, 27, 32, 37, and 42. Y is reported over All-QP, Low-QP (22 to 37), and High-QP (27 to 42), and U and V over All-QP. EncT and DecT are the ratios of the single-thread user times summed over the five QPs.'
-    cap_ko = r'클래스 D 시퀀스의 처음 2초를 QP 22, 27, 32, 37, 42로 부호화하여 VTM-23.8 앵커 대비 WARP-MC의 BD-rate(\%)를 구한 결과. Y는 All-QP, Low-QP(22부터 37), High-QP(27부터 42)로, U와 V는 All-QP로 보고한다. EncT와 DecT는 다섯 QP에 대해 합한 단일 스레드 사용자 시간의 비이다.'
+    cap_en = r'BD-rate (\%) of WARP-MC against the VTM-23.8 anchor on the first 2 seconds of the class %s sequences at QP 22, 27, 32, 37, and 42. Y is reported over All-QP, Low-QP (22 to 37), and High-QP (27 to 42), and U and V over All-QP. %s'
+    cap_ko = r'클래스 %s 시퀀스의 처음 2초를 QP 22, 27, 32, 37, 42로 부호화하여 VTM-23.8 앵커 대비 WARP-MC의 BD-rate(\%)를 구한 결과. Y는 All-QP, Low-QP(22부터 37), High-QP(27부터 42)로, U와 V는 All-QP로 보고한다. %s'
+    t_en = 'DecT is the ratio of the single-thread user times of the decoders summed over the five QPs.' if a.noenct else 'EncT and DecT are the ratios of the single-thread user times summed over the five QPs.'
+    t_ko = 'DecT는 다섯 QP에 대해 합한 복호기의 단일 스레드 사용자 시간의 비이다.' if a.noenct else 'EncT와 DecT는 다섯 QP에 대해 합한 단일 스레드 사용자 시간의 비이다.'
+    cap_en = cap_en.replace('%s', a.cls, 1).replace('%s', t_en, 1); cap_ko = cap_ko.replace('%s', a.cls, 1).replace('%s', t_ko, 1)
+    ne = a.noenct; tc = 'r' if ne else 'rr'; nc = 6 if ne else 7
+    th = 'Time' if ne else r'\multicolumn{2}{c}{Time}'; tn = 'DecT' if ne else 'EncT & DecT'
     ra, ldb, seqh, clsh = ('Random Access', 'Low Delay B', 'Sequence', 'Class ' + a.cls) if lang == 'en' else ('임의 접근', '저지연 B', '시퀀스', '클래스 ' + a.cls)
-    L = [r'\begin{table*}[!t]', r'\caption{%s}' % (cap_en if lang == 'en' else cap_ko), r'\label{tab:classD2s}', r'\centering', r'\footnotesize', r'\setlength{\tabcolsep}{3.5pt}',
-         r'\begin{tabular}{l rrrrr rr rrrrr rr}', r'\hline',
-         r' & \multicolumn{7}{c}{%s} & \multicolumn{7}{c}{%s} \\' % (ra, ldb),
-         r' & \multicolumn{3}{c}{Y} & U & V & \multicolumn{2}{c}{Time} & \multicolumn{3}{c}{Y} & U & V & \multicolumn{2}{c}{Time} \\',
-         r'%s & All & Low & High & All & All & EncT & DecT & All & Low & High & All & All & EncT & DecT \\' % seqh, r'\hline']
+    L = [r'\begin{table*}[!t]', r'\caption{%s}' % (cap_en if lang == 'en' else cap_ko), r'\label{tab:class%s2s}' % a.cls, r'\centering', r'\footnotesize', r'\setlength{\tabcolsep}{3.5pt}',
+         r'\begin{tabular}{l rrrrr %s rrrrr %s}' % (tc, tc), r'\hline',
+         r' & \multicolumn{%d}{c}{%s} & \multicolumn{%d}{c}{%s} \\' % (nc, ra, nc, ldb),
+         r' & \multicolumn{3}{c}{Y} & U & V & %s & \multicolumn{3}{c}{Y} & U & V & %s \\' % (th, th),
+         r'%s & All & Low & High & All & All & %s & All & Low & High & All & All & %s \\' % (seqh, tn, tn), r'\hline']
     for s in seqs:
         cells = [s.split('_')[1]]
         for c in ('RA', 'LDB'):
-            r = rows[(c, s)]; cells += [fmt(r[k]) for k in cols] + [fmtr(r['enct']), fmtr(r['dect'])]
+            r = rows[(c, s)]; cells += [fmt(r[k]) for k in cols] + ([] if a.noenct else [fmtr(r['enct'])]) + [fmtr(r['dect'])]
         L.append(' & '.join(cells) + r' \\')
     L.append(r'\hline'); cells = [clsh]
     for c in ('RA', 'LDB'):
-        cells += [fmt(mean(c, k)) for k in cols] + [fmtr(mean(c, 'enct')), fmtr(mean(c, 'dect'))]
+        cells += [fmt(mean(c, k)) for k in cols] + ([] if a.noenct else [fmtr(mean(c, 'enct'))]) + [fmtr(mean(c, 'dect'))]
     L += [' & '.join(cells) + r' \\', r'\hline', r'\end{tabular}', r'\end{table*}']
     return '\n'.join(L) + '\n'
 if a.out: open(a.out, 'w').write(table('en'))
