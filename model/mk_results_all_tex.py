@@ -54,7 +54,7 @@ def table(lang):
            r'CTC 시퀀스의 처음 2초를 QP 22, 27, 32, 37, 42로 부호화하여 VTM-23.8 앵커 대비 WARP-MC의 BD-rate(\%)를 구한 결과. Y는 All-QP, Low-QP(22부터 37), High-QP(27부터 42)로, U와 V는 All-QP로 보고한다. EncT와 DecT는 다섯 QP에 대해 합한 단일 스레드 사용자 시간의 비이다. 클래스 행은 해당 클래스 시퀀스의 평균이고, 전체 행은 모든 시퀀스의 평균이다.')
     ra, ldb, seqh, clsw = ('Random Access', 'Low Delay B', 'Sequence', 'Class %s') if lang == 'en' else ('임의 접근', '저지연 B', '시퀀스', '클래스 %s')
     L = [r'\begin{table*}[!t]', r'\caption{%s}' % cap, r'\label{tab:results2s}', r'\centering', r'\footnotesize', r'\setlength{\tabcolsep}{3.5pt}',
-         r'\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}l rrrrr rr rrrrr rr@{}}'  # yvvyee: 11-13 표를 본문 폭에 맞춘다, r'\hline',
+         r'\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}l rrrrr rr rrrrr rr@{}}', r'\hline',
          r' & \multicolumn{7}{c}{%s} & \multicolumn{7}{c}{%s} \\' % (ra, ldb),
          r' & \multicolumn{3}{c}{Y} & U & V & \multicolumn{2}{c}{Time} & \multicolumn{3}{c}{Y} & U & V & \multicolumn{2}{c}{Time} \\',
          r'%s & All & Low & High & All & All & EncT & DecT & All & Low & High & All & All & EncT & DecT \\' % seqh, r'\hline']
