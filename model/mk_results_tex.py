@@ -6,7 +6,7 @@ import sys, argparse, collections, numpy as np
 sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
 from bdrate import bd_rate
 ap = argparse.ArgumentParser(); ap.add_argument('txt'); ap.add_argument('--dect'); ap.add_argument('--enct')
-ap.add_argument('--out'); ap.add_argument('--ko'); ap.add_argument('--csv'); ap.add_argument('--cls', default='D'); ap.add_argument('--noenct', action='store_true')  # yvvyee: EncT 미수집 클래스는 EncT 열을 뺀다
+ap.add_argument('--out'); ap.add_argument('--ko'); ap.add_argument('--csv'); ap.add_argument('--cls', default='D'); ap.add_argument('--noenct', action='store_true'); ap.add_argument('--planned')  # yvvyee: EncT 미수집 클래스는 EncT 열을 뺀다
 a = ap.parse_args()
 D = collections.defaultdict(dict)
 for ln in open(a.txt):
@@ -39,7 +39,7 @@ for c in ('RA', 'LDB'):
         rows[(c, s)] = r
 cols = [('y','All'),('y','Low'),('y','High'),('u','All'),('v','All')]
 def fmt(x): x = round(x, 2) + 0.0; return ('$-$%.2f' % -x) if x < 0 else ('%.2f' % x)
-def fmtr(x): return '--' if x != x else ('%.0f' % x)
+def fmtr(x): return r'\planned' if x != x else ('%.0f' % x)  # yvvyee: 미수집 값은 원고 매크로 \planned(빨간색 planned/예정)
 def mean(c, key): v = [rows[(c, s)][key] for s in seqs if (c, s) in rows]; return float(np.mean(v)) if v else float('nan')
 def table(lang):
     cap_en = r'BD-rate (\%) of WARP-MC against the VTM-23.8 anchor on the first 2 seconds of the class %s sequences at QP 22, 27, 32, 37, and 42. Y is reported over All-QP, Low-QP (22 to 37), and High-QP (27 to 42), and U and V over All-QP. %s'
@@ -55,6 +55,10 @@ def table(lang):
          r' & \multicolumn{%d}{c}{%s} & \multicolumn{%d}{c}{%s} \\' % (nc, ra, nc, ldb),
          r' & \multicolumn{3}{c}{Y} & U & V & %s & \multicolumn{3}{c}{Y} & U & V & %s \\' % (th, th),
          r'%s & All & Low & High & All & All & %s & All & Low & High & All & All & %s \\' % (seqh, tn, tn), r'\hline']
+    if a.planned:
+        for nm in a.planned.split(','): L.append(r'%s & \multicolumn{%d}{c}{\planned} \\' % (nm, 2 * nc))
+        L += [r'\hline', r'%s & \multicolumn{%d}{c}{\planned} \\' % (clsh, 2 * nc), r'\hline', r'\end{tabular}', r'\end{table*}']
+        return '\n'.join(L) + '\n'
     for s in seqs:
         cells = [s.split('_')[1]]
         for c in ('RA', 'LDB'):
@@ -73,4 +77,5 @@ if a.csv:
         for (c, s), r in rows.items():
             f.write(','.join([c, s] + ['%.4f' % r[(k, nm)] for k in 'yuv' for nm in sets] + ['%.3f' % r['enct'], '%.3f' % r['dect']]) + '\n')
 print(table('en'))
+if a.planned: sys.exit(0)
 for c in ('RA', 'LDB'): print(c, 'mean', ' '.join('%s_%s=%+.3f' % (k, nm, mean(c, (k, nm))) for k, nm in cols), 'EncT=%.1f DecT=%.1f' % (mean(c, 'enct'), mean(c, 'dect')))
