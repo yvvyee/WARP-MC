@@ -8,6 +8,7 @@ import sys, os, argparse, collections, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bdrate import bd_rate
 ap = argparse.ArgumentParser(); ap.add_argument('specs', nargs='+'); ap.add_argument('--out'); ap.add_argument('--ko')
+ap.add_argument('--splice-en'); ap.add_argument('--splice-ko')  # single-file manuscripts: replace the marked results_2s block
 a = ap.parse_args()
 sets = {'All': (22, 27, 32, 37, 42), 'Low': (22, 27, 32, 37), 'High': (27, 32, 37, 42)}
 cols = [('y', 'All'), ('y', 'Low'), ('y', 'High'), ('u', 'All'), ('v', 'All')]
@@ -72,3 +73,14 @@ def table(lang):
     return '\n'.join(L) + '\n'
 if a.out: open(a.out, 'w').write(table('en'))
 if a.ko: open(a.ko, 'w').write(table('ko'))
+
+
+def splice(path, body):
+    b, e = '% >>> begin tables/results_2s', '% <<< end tables/results_2s'
+    t = open(path, encoding='utf-8').read()
+    i, j = t.index(b), t.index(e)
+    open(path, 'w', encoding='utf-8').write(t[:i] + b + '\n' + body.rstrip('\n') + '\n' + t[j:])
+
+
+if a.splice_en: splice(a.splice_en, table('en'))
+if a.splice_ko: splice(a.splice_ko, table('ko'))
