@@ -33,11 +33,14 @@ for s in $SEQS; do
   done
 done
 # 긴 작업(낮은 QP, 큰 클래스) 먼저, 순번을 붙여 앞 NG 건 GPU / 나머지 CPU
-SORTED=$JOBS.sorted; sort -k3,3 -k2,2n $JOBS | awk -v ng=$NG '{print (NR<=ng ? "G " (NR-1)%2 : "C -"), $0}' > $SORTED
+# yvvyee: 11-26 A1·A2 는 해상도가 같아 QP 오름차순(긴 작업 먼저)으로 정렬한다.
+SORTED=$JOBS.sorted; sort -k2,2n -k3,3 $JOBS | awk -v ng=$NG '{print (NR<=ng ? "G " (NR-1)%2 : "C -"), $0}' > $SORTED
 one() {
   path=$1; dev=$2; cfgname=$3; qp=$4; cls=$5; yuv=$6; pcfg=$7; fps=$8
   frames=$((2*fps)); if [ $fps -ge 50 ]; then ip=64; else ip=32; fi
   out=$ROOT/$MODE/$cfgname; mkdir -p $out; name=${cls}_${yuv}
+  # yvvyee: 11-26 WAITSEQ 시퀀스의 작업은 WAITLOG(해당 앵커 로그)에 Total Time 이 찍힐 때까지 자리만 잡고 기다린다.
+  if [ -n "${WAITSEQ:-}" ] && [ "$pcfg" = "$WAITSEQ" ]; then until grep -q "Total Time" "$WAITLOG" 2>/dev/null; do sleep 300; done; fi
   log=$out/${name}_q$qp.log; bin=$out/${name}_q$qp.bin; rec=$out/${name}_q$qp.rec.yuv
   [ -s "$log" ] && grep -q "Total Time" "$log" && { echo "skip $TAG $cfgname $name q$qp"; return 0; }
   if [ "$cfgname" = RA ]; then base=$CFG/encoder_randomaccess_vtm.cfg; ipopt="--IntraPeriod=$ip"; else base=$CFG/encoder_lowdelay_vtm.cfg; ipopt=""; fi
@@ -52,6 +55,7 @@ one() {
   if cmp -s $rec $rec.dec && ! grep -q "ERROR" $out/${name}_q$qp.dec.log; then echo "MATCH $cfgname $name q$qp ($path)" >> $ROOT/$MODE/consistency.txt; rm -f $rec $rec.dec; else echo "MISMATCH $cfgname $name q$qp ($path)" >> $ROOT/$MODE/consistency.txt; fi
   echo "done $TAG $cfgname $name q$qp $path$dev $(date '+%m-%d_%H:%M')"
 }
+export WAITSEQ=${WAITSEQ:-} WAITLOG=${WAITLOG:-}
 export -f one; export MODE TAG THR ROOT YUV CFG ENC_G DEC_G ENC_C DEC_C EXPORT CUDA_MPS_PIPE_DIRECTORY CUDA_MPS_LOG_DIRECTORY
 if [ "$DRY" = "--dry" ]; then echo "GPU jobs: $(grep -c '^G' $SORTED) (dev0 $(grep -c '^G 0' $SORTED), dev1 $(grep -c '^G 1' $SORTED)), CPU jobs: $(grep -c '^C' $SORTED)"; head -3 $SORTED; tail -9 $SORTED | head -2; exit 0; fi
 echo "C2S $TAG [$LBL] START $(date '+%m-%d_%H:%M') jobs $(wc -l < $JOBS) gpu $(grep -c '^G' $SORTED)/P$PG cpu $(grep -c '^C' $SORTED)/P$PC" >> $ROOT/progress.txt
